@@ -39,6 +39,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev dpkg-dev
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform.target }}
+
       - name: Build release
         run: cargo build --release --target ${{ matrix.platform.target }}
 
