@@ -73,8 +73,13 @@ jobs:
           xattr -cr "$BUNDLE"
           codesign --force --deep --sign - "$BUNDLE"
 
+          DMG_DIR="dmg-staging"
+          mkdir -p "$DMG_DIR"
+          cp -R "$BUNDLE" "$DMG_DIR/"
+          ln -s /Applications "$DMG_DIR/Applications"
+
           hdiutil create -volname "AI Usage Statistics" \
-            -srcfolder "$BUNDLE" \
+            -srcfolder "$DMG_DIR" \
             -ov -format UDZO \
             "AI-Usage-Statistics-${{ matrix.platform.name }}.dmg"
 
