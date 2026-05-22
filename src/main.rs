@@ -181,6 +181,14 @@ fn tr(lang: Language, key: &str) -> &'static str {
         (Language::English, "model_breakdown") => "Model Usage Breakdown",
         (Language::Chinese, "hourly_chart") => "\u{5C0F}\u{65F6}\u{7EA7} Token \u{8D8B}\u{52BF}",
         (Language::English, "hourly_chart") => "Hourly Token Usage Trend",
+        (Language::Chinese, "session_detail") => "\u{6BCF}\u{6B21}\u{4F1A}\u{8BDD}\u{660E}\u{7EC6}",
+        (Language::English, "session_detail") => "Session Detail",
+        (Language::Chinese, "time") => "\u{65F6}\u{95F4}",
+        (Language::English, "time") => "Time",
+        (Language::Chinese, "session_id") => "\u{4F1A}\u{8BDD} ID",
+        (Language::English, "session_id") => "Session ID",
+        (Language::Chinese, "tool_ranking") => "\u{5DE5}\u{5177}\u{4F7F}\u{7528}\u{6392}\u{540D}",
+        (Language::English, "tool_ranking") => "Tool Usage Ranking",
         // Miscellaneous
         (Language::Chinese, "loading") => "\u{52A0}\u{8F7D}\u{4E2D}...",
         (Language::English, "loading") => "Loading...",
@@ -987,6 +995,8 @@ impl eframe::App for AiUsageApp {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(self.tr("title"))
                     .font(FontId::new(20.0, FontFamily::Proportional)).color(c.text_primary));
+                ui.add_space(16.0);
+                self.time_range_selector(ui, c);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("\u{2699}").fill(egui::Color32::TRANSPARENT)
                         .corner_radius(CornerRadius::same(8)).frame(false)).clicked() {
@@ -997,8 +1007,6 @@ impl eframe::App for AiUsageApp {
                         .fill(c.surface3).corner_radius(CornerRadius::same(6))).clicked() {
                         self.start_load(self.date_range.clone());
                     }
-                    ui.add_space(8.0);
-                    self.time_range_selector(ui, c);
                 });
             });
         });
@@ -1214,41 +1222,90 @@ impl AiUsageApp {
 
         ui.add_space(12.0);
 
-        // ── Model Usage Breakdown ──
+        // ── Model Usage Breakdown + Tool Ranking ──
         if !self.model_breakdowns.is_empty() {
-            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{2699}", self.tr("model_breakdown")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
-                ui.add_space(10.0);
+            ui.columns(2, |cols| {
+                // Model Breakdown (left)
+                cols[0].vertical(|ui| {
+                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(14, 16), ..Default::default() }.show(ui, |ui| {
+                        ui.label(egui::RichText::new(format!("{}  {}", "\u{2699}", self.tr("model_breakdown")))
+                            .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                        ui.add_space(8.0);
 
-                let headers = [self.tr("tool"), self.tr("model"), self.tr("requests"),
-                    self.tr("tokens"), self.tr("cache"), self.tr("cache_pct"), self.tr("cost")];
-                let header_colors = [c.accent_light, c.text_secondary, c.text_secondary, c.accent_light, c.green, c.orange, c.text_secondary];
+                        let headers = [self.tr("tool"), self.tr("model"), self.tr("requests"),
+                            self.tr("tokens"), self.tr("cache"), self.tr("cache_pct"), self.tr("cost")];
+                        let header_colors = [c.accent_light, c.text_secondary, c.text_secondary, c.accent_light, c.green, c.orange, c.text_secondary];
 
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    egui::Grid::new("model_grid").striped(false).show(ui, |ui| {
-                        for (h, hc) in headers.iter().zip(header_colors.iter()) {
-                            ui.label(egui::RichText::new(*h).font(FontId::new(11.0, FontFamily::Proportional)).color(*hc).strong());
-                        }
-                        ui.end_row();
+                        egui::ScrollArea::horizontal().show(ui, |ui| {
+                            egui::Grid::new("model_grid").striped(false).show(ui, |ui| {
+                                for (h, hc) in headers.iter().zip(header_colors.iter()) {
+                                    ui.label(egui::RichText::new(*h).font(FontId::new(10.0, FontFamily::Proportional)).color(*hc).strong());
+                                }
+                                ui.end_row();
 
-                        for mb in &self.model_breakdowns {
-                            let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                            let cost_str = if mb.cost_cents > 0 { format!("${:.2}", mb.cost_cents as f64 / 100.0) } else { "-".into() };
-                            let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
+                                for mb in &self.model_breakdowns {
+                                    let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
+                                    let cost_str = if mb.cost_cents > 0 { format!("${:.2}", mb.cost_cents as f64 / 100.0) } else { "-".into() };
+                                    let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
 
-                            ui.horizontal(|ui| {
-                                self.tool_avatar(ui, &mb.cli_name, 12.0);
-                                ui.add_space(2.0);
-                                ui.label(egui::RichText::new(&mb.cli_name).font(FontId::new(11.0, FontFamily::Proportional)).color(cli_color(&mb.cli_name, 255)));
+                                    ui.horizontal(|ui| {
+                                        self.tool_avatar(ui, &mb.cli_name, 10.0);
+                                        ui.add_space(2.0);
+                                        ui.label(egui::RichText::new(&mb.cli_name).font(FontId::new(10.0, FontFamily::Proportional)).color(cli_color(&mb.cli_name, 255)));
+                                    });
+                                    ui.label(egui::RichText::new(&mb.model_name).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_primary));
+                                    ui.label(egui::RichText::new(&mb.request_count.to_string()).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_secondary));
+                                    ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                                    ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read)).font(FontId::new(10.0, FontFamily::Proportional)).color(ccol));
+                                    ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(10.0, FontFamily::Proportional)).color(ccol));
+                                    ui.label(egui::RichText::new(&cost_str).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_secondary));
+                                    ui.end_row();
+                                }
                             });
-                            ui.label(egui::RichText::new(&mb.model_name).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_primary));
-                            ui.label(egui::RichText::new(&mb.request_count.to_string()).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
-                            ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_primary).strong());
-                            ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read)).font(FontId::new(11.0, FontFamily::Proportional)).color(ccol));
-                            ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(11.0, FontFamily::Proportional)).color(ccol));
-                            ui.label(egui::RichText::new(&cost_str).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
-                            ui.end_row();
+                        });
+                    });
+                });
+
+                // Tool Ranking (right)
+                cols[1].vertical(|ui| {
+                    let mut tool_agg: std::collections::BTreeMap<&str, (u64, u64, u64)> = std::collections::BTreeMap::new();
+                    for mb in &self.model_breakdowns {
+                        let e = tool_agg.entry(&mb.cli_name).or_default();
+                        e.0 += mb.total_tokens;
+                        e.1 += mb.cache_read;
+                        e.2 += mb.request_count;
+                    }
+                    let mut tool_rank: Vec<_> = tool_agg.into_iter().collect();
+                    tool_rank.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+
+                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(14, 16), ..Default::default() }.show(ui, |ui| {
+                        ui.label(egui::RichText::new(format!("{}  {}", "\u{1F3C6}", self.tr("tool_ranking")))
+                            .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                        ui.add_space(8.0);
+
+                        let max_tokens = tool_rank.first().map(|t| t.1.0).unwrap_or(1).max(1);
+                        for (i, (name, (tokens, _cache, reqs))) in tool_rank.iter().enumerate() {
+                            let clr = cli_color(name, 255);
+                            let pct = *tokens as f32 / max_tokens as f32;
+                            let rank_icon = if i == 0 { "\u{1F947}" } else if i == 1 { "\u{1F948}" } else if i == 2 { "\u{1F949}" } else { "" };
+                            let row_h = 38.0;
+                            let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), egui::Sense::hover());
+                            ui.painter().rect(rect, CornerRadius::same(6), c.surface3, egui::Stroke::new(1.0, c.surface2), egui::StrokeKind::Inside);
+
+                            let bar_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * pct, rect.height()));
+                            ui.painter().rect_filled(bar_rect, CornerRadius::same(6), clr.gamma_multiply(0.10));
+
+                            let label_x = rect.left() + 10.0;
+                            ui.painter().text(egui::pos2(label_x, rect.center().y), egui::Align2::LEFT_CENTER,
+                                &format!("{} #{}", rank_icon, i + 1), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
+                            let name_x = label_x + if rank_icon.is_empty() { 24.0 } else { 32.0 };
+                            ui.painter().text(egui::pos2(name_x, rect.center().y), egui::Align2::LEFT_CENTER,
+                                name, FontId::new(13.0, FontFamily::Proportional), clr);
+                            ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y - 6.0), egui::Align2::RIGHT_CENTER,
+                                &format_tokens_full(*tokens), FontId::new(12.0, FontFamily::Proportional), c.text_primary);
+                            ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y + 8.0), egui::Align2::RIGHT_CENTER,
+                                &format!("{} {}", reqs, self.tr("requests")), FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+                            ui.add_space(4.0);
                         }
                     });
                 });
@@ -1294,6 +1351,9 @@ impl AiUsageApp {
             ui.label(egui::RichText::new(self.tr("no_period_data")).color(c.text_secondary));
             return;
         }
+
+        let clip_h = ui.clip_rect().height();
+        let top_y = ui.cursor().min.y;
 
         let total_tokens: u64 = records.iter().map(|r| r.total_tokens).sum();
         let total_cache: u64 = records.iter().map(|r| r.cache_read_tokens).sum();
@@ -1374,6 +1434,40 @@ impl AiUsageApp {
                         ui.end_row();
                     }
                 });
+            });
+        });
+
+        ui.add_space(16.0);
+
+        // Session detail — fill remaining space
+        let used_y = ui.cursor().min.y - top_y;
+        let remaining_h = (clip_h - used_y - 40.0).max(200.0);
+        Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 16), ..Default::default() }.show(ui, |ui| {
+            ui.set_min_height(remaining_h);
+            ui.label(egui::RichText::new(format!("{}  {} ({} {})", "\u{1F4CB}", self.tr("session_detail"), records.len(), self.tr("sessions")))
+                .font(FontId::new(16.0, FontFamily::Proportional)).color(c.text_primary));
+            ui.add_space(8.0);
+
+            egui::Grid::new("tool_session_grid").striped(true).show(ui, |ui| {
+                let sheaders = [self.tr("session_id"), self.tr("time"), self.tr("model"), self.tr("tokens"), self.tr("cache"), self.tr("cache_pct")];
+                for h in &sheaders {
+                    ui.label(egui::RichText::new(*h).font(FontId::new(12.0, FontFamily::Proportional)).color(clr).strong());
+                }
+                ui.end_row();
+
+                for rec in records.iter().rev() {
+                    let cache_pct = if rec.total_tokens > 0 { rec.cache_read_tokens as f64 / rec.total_tokens as f64 * 100.0 } else { 0.0 };
+                    let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
+                    let sid = if rec.session_id.is_empty() { "-".to_string() } else { rec.session_id.clone() };
+
+                    ui.label(egui::RichText::new(&sid).font(FontId::new(11.0, FontFamily::Monospace)).color(c.text_secondary));
+                    ui.label(egui::RichText::new(format!("{} {}", rec.date, rec.hour)).font(FontId::new(12.0, FontFamily::Monospace)).color(c.text_secondary));
+                    ui.label(egui::RichText::new(&rec.model_name).font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_primary));
+                    ui.label(egui::RichText::new(&format_tokens_full(rec.total_tokens)).font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                    ui.label(egui::RichText::new(&format_tokens_full(rec.cache_read_tokens)).font(FontId::new(12.0, FontFamily::Proportional)).color(ccol));
+                    ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(12.0, FontFamily::Proportional)).color(ccol));
+                    ui.end_row();
+                }
             });
         });
     }
@@ -1490,6 +1584,33 @@ fn setup_fonts(cc: &eframe::CreationContext) {
     cc.egui_ctx.set_fonts(fonts);
 }
 
+fn load_icon_from_icns() -> Option<egui::IconData> {
+    let data = include_bytes!("../build/macos/AppIcon.icns");
+    if data.len() < 8 || &data[0..4] != b"icns" {
+        return None;
+    }
+    let mut best: Option<(Vec<u8>, u32, u32)> = None;
+    let mut i = 8usize;
+    while i + 8 <= data.len() {
+        let entry_type = &data[i..i+4];
+        let entry_size = u32::from_be_bytes([data[i+4], data[i+5], data[i+6], data[i+7]]) as usize;
+        if entry_size < 8 || i + entry_size > data.len() {
+            break;
+        }
+        let payload = &data[i+8..i+entry_size];
+        if entry_type == b"ic10" || entry_type == b"ic09" || entry_type == b"ic08" || entry_type == b"ic07" {
+            if let Ok(img) = image::load_from_memory(payload) {
+                let (w, h) = img.dimensions();
+                if best.as_ref().map(|b| w > b.1).unwrap_or(true) {
+                    best = Some((img.to_rgba8().to_vec(), w, h));
+                }
+            }
+        }
+        i += entry_size;
+    }
+    best.map(|(rgba, w, h)| egui::IconData { rgba, width: w, height: h })
+}
+
 fn main() -> Result<(), eframe::Error> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
@@ -1506,7 +1627,12 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 750.0])
             .with_min_inner_size([800.0, 500.0])
-            .with_title(window_title),
+            .with_title(window_title)
+            .with_icon(load_icon_from_icns().unwrap_or(egui::IconData {
+                rgba: vec![255u8; 64 * 64 * 4],
+                width: 64,
+                height: 64,
+            })),
         ..Default::default()
     };
 

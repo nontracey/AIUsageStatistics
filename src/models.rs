@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsageRecord {
+    pub session_id: String,
     pub cli_name: String,
     pub source_type: SourceType,
     pub model_name: String,

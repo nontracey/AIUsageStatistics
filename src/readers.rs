@@ -62,7 +62,7 @@ impl UsageReader for OpencodeReader {
 
         let mut stmt = match conn.prepare(
             "SELECT tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
-                    tokens_reasoning, model, time_created, cost, agent
+                    tokens_reasoning, model, time_created, cost, agent, id
              FROM session
              WHERE date(time_created / 1000, 'unixepoch') >= ?1
                AND date(time_created / 1000, 'unixepoch') <= ?2
@@ -87,6 +87,7 @@ impl UsageReader for OpencodeReader {
             let ts_ms: i64 = row.get(6)?;
             let cost: f64 = row.get(7)?;
             let _agent: Option<String> = row.get(8)?;
+            let session_id: Option<String> = row.get(9).ok().and_then(|s: Option<String>| s);
 
             let model_name = serde_json::from_str::<serde_json::Value>(&model_json)
                 .ok()
@@ -98,6 +99,7 @@ impl UsageReader for OpencodeReader {
                 .unwrap_or_default();
 
             Ok(UsageRecord {
+                session_id: session_id.unwrap_or_default(),
                 cli_name: "opencode".to_string(),
                 source_type: SourceType::Cli,
                 model_name,
@@ -173,7 +175,7 @@ impl UsageReader for HermesReader {
         let mut stmt = match conn.prepare(
             "SELECT model, input_tokens, output_tokens, cache_read_tokens,
                     cache_write_tokens, reasoning_tokens, started_at,
-                    estimated_cost_usd, actual_cost_usd, source
+                    estimated_cost_usd, actual_cost_usd, source, id
              FROM sessions
              WHERE started_at >= ?1 AND started_at <= ?2
              ORDER BY started_at"
@@ -198,6 +200,7 @@ impl UsageReader for HermesReader {
             let est_cost: Option<f64> = row.get(7)?;
             let act_cost: Option<f64> = row.get(8)?;
             let source: Option<String> = row.get(9)?;
+            let session_id: Option<String> = row.get(10).ok().and_then(|s: Option<String>| s);
 
             let dt = chrono::DateTime::from_timestamp(started_at as i64, 0)
                 .map(|d| d.naive_utc())
@@ -210,6 +213,7 @@ impl UsageReader for HermesReader {
             };
 
             Ok(UsageRecord {
+                session_id: session_id.unwrap_or_default(),
                 cli_name: "hermes".to_string(),
                 source_type: src,
                 model_name: model.unwrap_or_else(|| "unknown".to_string()),
@@ -364,6 +368,9 @@ impl UsageReader for CodexReader {
             }
 
             records.push(UsageRecord {
+                session_id: thread.rollout_path.as_deref().and_then(|p| {
+                    std::path::Path::new(p).file_stem().and_then(|s| s.to_str().map(|s| s.to_string()))
+                }).unwrap_or_default(),
                 cli_name: "codex".to_string(),
                 source_type: src,
                 model_name: thread.model.unwrap_or_else(|| "unknown".to_string()),
@@ -468,7 +475,7 @@ impl UsageReader for ClaudeReader {
             cli_name: self.name().to_string(), percent: 0.5, message: "Reading session-meta files...".into(), done: false, error: None,
         });
 
-        let mut session_entries: Vec<(NaiveDate, u8, u64, u64, String)> = Vec::new();
+        let mut session_entries: Vec<(NaiveDate, u8, u64, u64, String, String)> = Vec::new();
 
         if meta_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&meta_dir) {
@@ -479,6 +486,7 @@ impl UsageReader for ClaudeReader {
                 let total_files = files.len();
                 for (i, entry) in files.iter().enumerate() {
                     let path = entry.path();
+                    let session_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                             let start_time = json.get("start_time").and_then(|v| v.as_str()).unwrap_or("");
@@ -493,7 +501,7 @@ impl UsageReader for ClaudeReader {
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string())
                                         .unwrap_or_else(|| "unknown".to_string());
-                                    session_entries.push((date, dt.hour() as u8, inp, out, model));
+                                    session_entries.push((date, dt.hour() as u8, inp, out, model, session_id));
                                 }
                             }
                         }
@@ -511,7 +519,7 @@ impl UsageReader for ClaudeReader {
         }
 
         // Build records from session entries
-        for (date, hour, inp, out, model_name) in session_entries {
+        for (date, hour, inp, out, model_name, session_id) in session_entries {
             let model = if model_name == "unknown" {
                 // Try to find model from per_model_totals
                 if !per_model_totals.is_empty() {
@@ -530,6 +538,7 @@ impl UsageReader for ClaudeReader {
             let (_, _, cache_r, cache_w) = per_model_totals.get(&model).copied().unwrap_or((0, 0, 0, 0));
 
             records.push(UsageRecord {
+                session_id,
                 cli_name: "claude".to_string(),
                 source_type: SourceType::Cli,
                 model_name: model,
@@ -611,6 +620,7 @@ impl UsageReader for QwenReader {
         let mut records: Vec<UsageRecord> = Vec::new();
 
         for (i, path) in chat_files.iter().enumerate() {
+            let chat_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
             if let Ok(content) = std::fs::read_to_string(path) {
                 for line in content.lines() {
                     if line.trim().is_empty() { continue; }
@@ -663,6 +673,7 @@ impl UsageReader for QwenReader {
                         }
 
                         records.push(UsageRecord {
+                            session_id: chat_id.clone(),
                             cli_name: "qwen".to_string(),
                             source_type: SourceType::Cli,
                             model_name: model,
