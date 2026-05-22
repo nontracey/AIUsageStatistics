@@ -1462,16 +1462,22 @@ fn main() -> Result<(), eframe::Error> {
             .add_directive("ai_usage_statistics=info".parse().unwrap()))
         .init();
 
+    let config = load_config();
+    let window_title = match config.language.as_str() {
+        "English" => "AI Usage Statistics",
+        _ => "AI 使用量统计",
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 750.0])
             .with_min_inner_size([800.0, 500.0])
-            .with_title("AI Usage Statistics"),
+            .with_title(window_title),
         ..Default::default()
     };
 
     eframe::run_native(
-        "AI Usage Statistics",
+        window_title,
         options,
         Box::new(|cc| {
             setup_fonts(cc);

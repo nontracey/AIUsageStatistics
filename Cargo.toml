@@ -2,6 +2,15 @@
 name = "ai-usage-statistics"
 version = "0.1.1"
 edition = "2021"
+description = "AI Usage Statistics - Track and visualize AI tool usage"
+authors = ["nontracey"]
+license = "MIT"
+
+[package.metadata.deb]
+maintainer = "nontracey"
+depends = "$auto"
+section = "utils"
+priority = "optional"
 
 [dependencies]
 eframe = "0.31"

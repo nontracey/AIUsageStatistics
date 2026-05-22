@@ -37,7 +37,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev dpkg-dev
 
       - name: Build release
         run: cargo build --release --target ${{ matrix.platform.target }}
@@ -49,6 +49,33 @@ jobs:
           cd target/${{ matrix.platform.target }}/release
           tar czf ../../../ai-usage-statistics-${{ matrix.platform.name }}.tar.gz ai-usage-statistics
           cd -
+
+      - name: Package as .app bundle and .dmg (macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          BUNDLE="AI Usage Statistics.app"
+          mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+
+          cp "target/${{ matrix.platform.target }}/release/ai-usage-statistics" \
+             "$BUNDLE/Contents/MacOS/ai-usage-statistics"
+
+          cp build/macos/AppIcon.icns "$BUNDLE/Contents/Resources/"
+
+          sed "s/VERSION_PLACEHOLDER/$VERSION/g" build/macos/Info.plist > "$BUNDLE/Contents/Info.plist"
+
+          hdiutil create -volname "AI Usage Statistics" \
+            -srcfolder "$BUNDLE" \
+            -ov -format UDZO \
+            "AI-Usage-Statistics-${{ matrix.platform.name }}.dmg"
+
+      - name: Package as .deb (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --target ${{ matrix.platform.target }}
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
@@ -65,6 +92,8 @@ jobs:
           path: |
             ai-usage-statistics-${{ matrix.platform.name }}.tar.gz
             ai-usage-statistics-${{ matrix.platform.name }}.zip
+            AI-Usage-Statistics-*.dmg
+            target/**/*.deb
 
   release:
     name: Create Release
@@ -82,7 +111,7 @@ jobs:
           echo "## AI Usage Statistics ${{ github.ref_name }}" > release-notes.md
           echo "" >> release-notes.md
           echo "### 下载" >> release-notes.md
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) | while read f; do
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' \) | sort | while read f; do
             name=$(basename "$f")
             echo "- \`$name\`" >> release-notes.md
           done
@@ -94,3 +123,5 @@ jobs:
           files: |
             artifacts/*/*.tar.gz
             artifacts/*/*.zip
+            artifacts/*/*.dmg
+            artifacts/*/*.deb
