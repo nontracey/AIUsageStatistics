@@ -98,43 +98,14 @@ jobs:
           7z a ../../../ai-usage-statistics-${{ matrix.platform.name }}.zip ai-usage-statistics.exe
           cd -
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ai-usage-statistics-${{ matrix.platform.name }}
-          path: |
+          name: AI Usage Statistics ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
             ai-usage-statistics-${{ matrix.platform.name }}.tar.gz
             ai-usage-statistics-${{ matrix.platform.name }}.zip
             AI-Usage-Statistics-*.dmg
             target/**/*.deb
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate release notes
-        run: |
-          echo "## AI Usage Statistics ${{ github.ref_name }}" > release-notes.md
-          echo "" >> release-notes.md
-          echo "### 下载" >> release-notes.md
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' -o -name '*.deb' \) | sort | while read f; do
-            name=$(basename "$f")
-            echo "- \`$name\`" >> release-notes.md
-          done
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: release-notes.md
-          files: |
-            artifacts/*/*.tar.gz
-            artifacts/*/*.zip
-            artifacts/*/*.dmg
-            artifacts/*/*.deb
