@@ -180,6 +180,7 @@ pub fn apply_update(new_binary: &std::path::Path) -> Result<(), String> {
             let _ = std::fs::rename(&backup_path, &self_path);
             format!("复制新版本失败: {}", e)
         })?;
+        #[cfg(unix)]
         std::fs::set_permissions(&self_path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .map_err(|e| format!("设置权限失败: {}", e))?;
     }
