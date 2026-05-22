@@ -65,7 +65,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-usage-statistics-${{ matrix.platform.name }}
-          path: ai-usage-statistics-${{ matrix.platform.name }}.tar.gz
+          path: |
+            ai-usage-statistics-${{ matrix.platform.name }}.tar.gz
+            ai-usage-statistics-${{ matrix.platform.name }}.zip
 
   release:
     name: Create Release
