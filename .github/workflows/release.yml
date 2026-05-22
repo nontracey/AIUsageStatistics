@@ -60,14 +60,19 @@ jobs:
 
           cp "target/${{ matrix.platform.target }}/release/ai-usage-statistics" \
              "$BUNDLE/Contents/MacOS/ai-usage-statistics"
+          chmod 755 "$BUNDLE/Contents/MacOS/ai-usage-statistics"
 
           cp build/macos/AppIcon.icns "$BUNDLE/Contents/Resources/"
 
           sed "s/VERSION_PLACEHOLDER/$VERSION/g" build/macos/Info.plist > "$BUNDLE/Contents/Info.plist"
 
+          xattr -cr "$BUNDLE"
+          codesign --force --deep --sign - "$BUNDLE"
+
           hdiutil create -volname "AI Usage Statistics" \
             -srcfolder "$BUNDLE" \
             -ov -format UDZO \
+            -noqtn \
             "AI-Usage-Statistics-${{ matrix.platform.name }}.dmg"
 
       - name: Package as .deb (Linux only)

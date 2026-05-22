@@ -1122,133 +1122,162 @@ impl AiUsageApp {
 
         ui.add_space(4.0);
 
-        // Summary Statistics
-        egui::CollapsingHeader::new(egui::RichText::new(format!("{}  {}", "\u{1F4CA}", self.tr("summary_stats")))
-                .font(FontId::new(18.0, FontFamily::Proportional)).color(c.text_primary).strong())
-            .default_open(true).show(ui, |ui| {
-                ui.add_space(8.0);
-                Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        stat_card(ui, self.tr("total_tokens"), &format_tokens_full(self.summary_total_tokens), c.accent_light, "", c);
-                        stat_card(ui, self.tr("cache_hit_rate"),
-                            &format!("{:.1}%", if self.summary_total_tokens > 0 { self.summary_total_cache as f64 / self.summary_total_tokens as f64 * 100.0 } else { 0.0 }),
-                            c.green, &format!("{} {}", self.tr("cached"), format_tokens_full(self.summary_total_cache)), c);
-                        stat_card(ui, self.tr("total_requests"), &format_tokens_full(self.summary_total_requests), c.cyan, "", c);
-                        stat_card(ui, self.tr("active_tools"), &self.detected_clis.len().to_string(), c.yellow, "", c);
-                    });
-                });
+        // ── Stat Cards ──
+        let cache_rate = if self.summary_total_tokens > 0 {
+            self.summary_total_cache as f64 / self.summary_total_tokens as f64 * 100.0
+        } else { 0.0 };
+
+        Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let cards = [
+                    ("total_tokens", &format_tokens_full(self.summary_total_tokens), c.accent_light, "\u{1F4A0}", None),
+                    ("cache_hit_rate", &format!("{:.1}%", cache_rate), c.green, "\u{1F4BF}", Some(cache_rate as f32 / 100.0)),
+                    ("total_requests", &format_tokens_full(self.summary_total_requests), c.cyan, "\u{1F4AC}", None),
+                    ("active_tools", &self.detected_clis.len().to_string(), c.yellow, "\u{1F916}", None),
+                ];
+                for (key, val, color, icon, bar) in &cards {
+                    let avail = (ui.available_width() - 16.0) / 4.0;
+                    let bg = color.gamma_multiply(0.12);
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.max(110.0), 80.0), egui::Sense::hover());
+                    let bg_rect = rect.shrink(2.0);
+                    let round = CornerRadius::same(10);
+                    ui.painter().rect(bg_rect, round, bg, egui::Stroke::new(1.0, color.gamma_multiply(0.25)), egui::StrokeKind::Inside);
+                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 12.0), egui::Align2::LEFT_TOP, *icon, FontId::new(18.0, FontFamily::Proportional), *color);
+                    ui.painter().text(egui::pos2(bg_rect.right() - 12.0, bg_rect.bottom() - 12.0), egui::Align2::RIGHT_BOTTOM, *val, FontId::new(22.0, FontFamily::Proportional), *color);
+                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, self.tr(key), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
+                    if let Some(pct) = bar {
+                        let bar_rect = egui::Rect::from_min_size(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 36.0), Vec2::new(bg_rect.width() - 24.0, 4.0));
+                        ui.painter().rect_filled(bar_rect, CornerRadius::same(2), c.surface3);
+                        if *pct > 0.0 {
+                            let fill = egui::Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * *pct, bar_rect.height()));
+                            ui.painter().rect_filled(fill, CornerRadius::same(2), *color);
+                        }
+                    }
+                    ui.add_space(12.0);
+                }
             });
+        });
 
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
-        // Tool Breakdown
-        egui::CollapsingHeader::new(egui::RichText::new(format!("{}  {}", "\u{1F527}", self.tr("tool_breakdown")))
-                .font(FontId::new(18.0, FontFamily::Proportional)).color(c.text_primary).strong())
-            .default_open(true).show(ui, |ui| {
-                ui.add_space(8.0);
-                for name in self.ordered_tools() {
-                    let records = match self.records_by_cli.get(&name) {
-                        Some(r) if !r.is_empty() => r,
-                        _ => continue,
-                    };
+        // ── Tool Breakdown ──
+        let tools_with_data: Vec<_> = self.ordered_tools().into_iter().filter(|n| {
+            self.records_by_cli.get(n).map(|r| !r.is_empty()).unwrap_or(false)
+        }).collect();
+
+        if !tools_with_data.is_empty() {
+            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F527}", self.tr("tool_breakdown")))
+                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.add_space(10.0);
+
+                for name in &tools_with_data {
+                    let records = self.records_by_cli.get(name).unwrap();
                     let total = records.iter().map(|r| r.total_tokens).sum::<u64>();
                     let cnt = records.len();
-                    let clr = cli_color(&name, 255);
+                    let clr = cli_color(name, 255);
+                    let row_h = 48.0;
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), egui::Sense::hover());
+                    ui.painter().rect(rect, CornerRadius::same(8), c.surface3, egui::Stroke::new(1.0, c.surface2), egui::StrokeKind::Inside);
 
-                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(10), inner_margin: Margin::symmetric(16, 12), ..Default::default() }.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            self.tool_avatar(ui, &name, 22.0);
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new(&name).font(FontId::new(16.0, FontFamily::Proportional)).color(clr).strong());
-                            ui.add_space(12.0);
-                            ui.label(egui::RichText::new(format_tokens_full(total))
-                                .font(FontId::new(16.0, FontFamily::Proportional)).color(c.text_primary).strong());
-                            ui.label(egui::RichText::new(format!("{} {}", cnt, self.tr("sessions")))
-                                .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
-                        });
+                    let left_strip = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0, rect.top() + 4.0), Vec2::new(3.0, rect.height() - 8.0));
+                    ui.painter().rect_filled(left_strip, CornerRadius::same(2), clr);
+
+                    let icon_pos = egui::pos2(rect.left() + 14.0, rect.top() + 14.0);
+                    if let Some(tex) = self.tool_textures.get(name) {
+                        let r2 = egui::Rect::from_center_size(icon_pos, Vec2::splat(16.0));
+                        egui::Image::from_texture(tex).paint_at(ui, r2);
+                    } else {
+                        ui.painter().circle_filled(icon_pos, 8.0, clr);
+                    }
+
+                    ui.painter().text(egui::pos2(rect.left() + 36.0, rect.top() + 14.0), egui::Align2::LEFT_CENTER, name.as_str(), FontId::new(14.0, FontFamily::Proportional), clr);
+                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.top() + 14.0), egui::Align2::RIGHT_CENTER, &format_tokens_full(total), FontId::new(15.0, FontFamily::Proportional), c.text_primary);
+                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.top() + 14.0 - 10.0), egui::Align2::RIGHT_CENTER, &format!("{} {}", cnt, self.tr("sessions")), FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+
+                    let model_str: String = {
                         let tool_models = aggregate_by_model(records);
-                        if !tool_models.is_empty() {
-                            ui.add_space(4.0);
-                            ui.horizontal_wrapped(|ui| {
-                                for mb in &tool_models {
-                                    let rate = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                                    let lbl = format!("{} ({} / {:.0}%)", mb.model_name, format_tokens(mb.total_tokens), rate);
-                                    ui.label(egui::RichText::new(lbl)
-                                        .font(FontId::new(11.0, FontFamily::Proportional))
-                                        .color(if rate > 50.0 { c.green } else { c.text_secondary }));
-                                }
-                            });
-                        }
-                    });
+                        tool_models.iter().map(|mb| {
+                            let mr = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
+                            let icon = if mr > 50.0 { "\u{26A1}" } else { "" };
+                            format!("{}{}({})", icon, mb.model_name, format_tokens(mb.total_tokens))
+                        }).collect::<Vec<_>>().join("  ")
+                    };
+                    if !model_str.is_empty() {
+                        ui.painter().text(egui::pos2(rect.left() + 36.0, rect.top() + 34.0), egui::Align2::LEFT_CENTER, &model_str, FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+                    }
+
                     ui.add_space(6.0);
                 }
             });
-
-        ui.add_space(8.0);
-
-        // Model Usage Breakdown
-        if !self.model_breakdowns.is_empty() {
-            egui::CollapsingHeader::new(egui::RichText::new(format!("{}  {}", "\u{2699}", self.tr("model_breakdown")))
-                    .font(FontId::new(18.0, FontFamily::Proportional)).color(c.text_primary).strong())
-                .default_open(true).show(ui, |ui| {
-                    ui.add_space(8.0);
-                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 16), ..Default::default() }.show(ui, |ui| {
-                        let headers = [self.tr("tool"), self.tr("model"), self.tr("requests"),
-                            self.tr("tokens"), self.tr("cache"), self.tr("cache_pct"), self.tr("cost")];
-
-                        egui::ScrollArea::horizontal().show(ui, |ui| {
-                            egui::Grid::new("model_grid").striped(true).show(ui, |ui| {
-                                for h in &headers {
-                                    ui.label(egui::RichText::new(*h).font(FontId::new(12.0, FontFamily::Proportional)).color(c.accent_light).strong());
-                                }
-                                ui.end_row();
-
-                                for mb in &self.model_breakdowns {
-                                    let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                                    let cost_str = if mb.cost_cents > 0 { format!("${:.2}", mb.cost_cents as f64 / 100.0) } else { "-".into() };
-
-                                    ui.horizontal(|ui| {
-                                        self.tool_avatar(ui, &mb.cli_name, 14.0);
-                                        ui.add_space(2.0);
-                                        ui.label(egui::RichText::new(&mb.cli_name).color(cli_color(&mb.cli_name, 255)));
-                                    });
-                                    ui.label(egui::RichText::new(&mb.model_name).color(c.text_primary));
-                                    ui.label(egui::RichText::new(&mb.request_count.to_string()).color(c.text_secondary));
-                                    ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).color(c.text_primary).strong());
-                                    ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read))
-                                        .color(if cache_pct > 50.0 { c.green } else { c.text_secondary }));
-                                    ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct))
-                                        .color(if cache_pct > 50.0 { c.green } else { c.orange }));
-                                    ui.label(egui::RichText::new(&cost_str).color(c.text_secondary));
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    });
-                });
         }
 
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
-        // Hourly Trend Chart
-        if !self.hourly_data.is_empty() {
-            egui::CollapsingHeader::new(egui::RichText::new(format!("{}  {}", "\u{1F4C8}", self.tr("hourly_chart")))
-                    .font(FontId::new(18.0, FontFamily::Proportional)).color(c.text_primary).strong())
-                .default_open(true).show(ui, |ui| {
-                    ui.add_space(8.0);
-                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 16), ..Default::default() }.show(ui, |ui| {
-                        let points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.total_tokens as f64]).collect();
-                        let cache_points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.cache_hit as f64]).collect();
+        // ── Model Usage Breakdown ──
+        if !self.model_breakdowns.is_empty() {
+            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("{}  {}", "\u{2699}", self.tr("model_breakdown")))
+                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.add_space(10.0);
 
-                        let line_total = Line::new(PlotPoints::from(points)).color(c.accent_light).width(2.5).name("Total Tokens");
-                        let line_cache = Line::new(PlotPoints::from(cache_points)).color(c.green).width(2.0).name("Cache Hit").highlight(true);
+                let headers = [self.tr("tool"), self.tr("model"), self.tr("requests"),
+                    self.tr("tokens"), self.tr("cache"), self.tr("cache_pct"), self.tr("cost")];
+                let header_colors = [c.accent_light, c.text_secondary, c.text_secondary, c.accent_light, c.green, c.orange, c.text_secondary];
 
-                        Plot::new("hourly_chart").height(200.0).show_background(false).show_axes(true).show_grid(true)
-                            .x_axis_label("Hour").y_axis_label("Tokens").show(ui, |plot_ui| {
-                                plot_ui.line(line_total); plot_ui.line(line_cache);
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    egui::Grid::new("model_grid").striped(false).show(ui, |ui| {
+                        for (h, hc) in headers.iter().zip(header_colors.iter()) {
+                            ui.label(egui::RichText::new(*h).font(FontId::new(11.0, FontFamily::Proportional)).color(*hc).strong());
+                        }
+                        ui.end_row();
+
+                        for mb in &self.model_breakdowns {
+                            let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
+                            let cost_str = if mb.cost_cents > 0 { format!("${:.2}", mb.cost_cents as f64 / 100.0) } else { "-".into() };
+                            let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
+
+                            ui.horizontal(|ui| {
+                                self.tool_avatar(ui, &mb.cli_name, 12.0);
+                                ui.add_space(2.0);
+                                ui.label(egui::RichText::new(&mb.cli_name).font(FontId::new(11.0, FontFamily::Proportional)).color(cli_color(&mb.cli_name, 255)));
                             });
+                            ui.label(egui::RichText::new(&mb.model_name).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_primary));
+                            ui.label(egui::RichText::new(&mb.request_count.to_string()).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
+                            ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                            ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read)).font(FontId::new(11.0, FontFamily::Proportional)).color(ccol));
+                            ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(11.0, FontFamily::Proportional)).color(ccol));
+                            ui.label(egui::RichText::new(&cost_str).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
+                            ui.end_row();
+                        }
                     });
                 });
+            });
+        }
+
+        ui.add_space(12.0);
+
+        // ── Hourly Trend Chart ──
+        if !self.hourly_data.is_empty() {
+            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F4C8}", self.tr("hourly_chart")))
+                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.add_space(10.0);
+
+                let points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.total_tokens as f64]).collect();
+                let cache_points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.cache_hit as f64]).collect();
+
+                let line_total = Line::new(PlotPoints::from(points.clone()))
+                    .color(c.accent_light).width(2.5).name("Total Tokens")
+                    .fill(0.15);
+                let line_cache = Line::new(PlotPoints::from(cache_points))
+                    .color(c.green).width(2.0).name("Cache Hit").highlight(true);
+
+                Plot::new("hourly_chart").height(200.0).show_background(false).show_axes(true).show_grid(true)
+                    .x_axis_label("Hour").y_axis_label("Tokens").show(ui, |plot_ui| {
+                        plot_ui.line(line_total); plot_ui.line(line_cache);
+                    });
+            });
         }
     }
 
@@ -1270,7 +1299,6 @@ impl AiUsageApp {
         let total_cache: u64 = records.iter().map(|r| r.cache_read_tokens).sum();
         let total_req: u64 = records.iter().map(|r| r.request_count).sum();
         let models: BTreeSet<&str> = records.iter().map(|r| r.model_name.as_str()).collect();
-        let models_str = self.models_cache.get(cli_name).cloned().unwrap_or_default();
         let clr = cli_color(cli_name, 255);
 
         // Header
@@ -1285,12 +1313,32 @@ impl AiUsageApp {
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                stat_card(ui, self.tr("total_tokens"), &format_tokens_full(total_tokens), clr, "", c);
-                stat_card(ui, self.tr("cache_hit_rate"),
-                    &format!("{:.1}%", if total_tokens > 0 { total_cache as f64 / total_tokens as f64 * 100.0 } else { 0.0 }),
-                    c.green, &format!("{} {}", self.tr("cached"), format_tokens_full(total_cache)), c);
-                stat_card(ui, self.tr("total_requests"), &total_req.to_string(), c.cyan, "", c);
-                stat_card(ui, self.tr("model"), &models.len().to_string(), c.yellow, &models_str, c);
+                let tool_cards = [
+                    ("total_tokens", &format_tokens_full(total_tokens), clr, "\u{1F4A0}", None),
+                    ("cache_hit_rate", &format!("{:.1}%", if total_tokens > 0 { total_cache as f64 / total_tokens as f64 * 100.0 } else { 0.0 }), c.green, "\u{1F4BF}", Some(if total_tokens > 0 { total_cache as f32 / total_tokens as f32 } else { 0.0 })),
+                    ("total_requests", &total_req.to_string(), c.cyan, "\u{1F4AC}", None),
+                    ("model", &models.len().to_string(), c.yellow, "\u{1F916}", None),
+                ];
+                for (key, val, color, icon, bar) in &tool_cards {
+                    let avail = (ui.available_width() - 16.0) / 4.0;
+                    let bg = color.gamma_multiply(0.12);
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.max(110.0), 80.0), egui::Sense::hover());
+                    let bg_rect = rect.shrink(2.0);
+                    let round = CornerRadius::same(10);
+                    ui.painter().rect(bg_rect, round, bg, egui::Stroke::new(1.0, color.gamma_multiply(0.25)), egui::StrokeKind::Inside);
+                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 12.0), egui::Align2::LEFT_TOP, *icon, FontId::new(18.0, FontFamily::Proportional), *color);
+                    ui.painter().text(egui::pos2(bg_rect.right() - 12.0, bg_rect.bottom() - 12.0), egui::Align2::RIGHT_BOTTOM, *val, FontId::new(22.0, FontFamily::Proportional), *color);
+                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, self.tr(key), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
+                    if let Some(pct) = bar {
+                        let bar_rect = egui::Rect::from_min_size(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 36.0), Vec2::new(bg_rect.width() - 24.0, 4.0));
+                        ui.painter().rect_filled(bar_rect, CornerRadius::same(2), c.surface3);
+                        if *pct > 0.0 {
+                            let fill = egui::Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * *pct, bar_rect.height()));
+                            ui.painter().rect_filled(fill, CornerRadius::same(2), *color);
+                        }
+                    }
+                    ui.add_space(12.0);
+                }
             });
         });
         ui.add_space(16.0);
@@ -1342,21 +1390,7 @@ fn tab_button(ui: &mut egui::Ui, label: &str, selected: bool, accent: Color32, c
     ).clicked()
 }
 
-fn stat_card(ui: &mut egui::Ui, title: &str, value: &str, color: Color32, subtitle: &str, c: &ThemeColors) {
-    let available = (ui.available_width() - 24.0) / 4.0;
-    Frame { fill: c.surface3, corner_radius: CornerRadius::same(10), inner_margin: Margin::symmetric(14, 12), ..Default::default() }.show(ui, |ui| {
-        ui.set_min_width(available.max(120.0));
-        ui.set_max_width(available.max(120.0));
-        ui.label(egui::RichText::new(title).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(value).font(FontId::new(22.0, FontFamily::Proportional)).color(color).strong());
-        if !subtitle.is_empty() {
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(subtitle).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
-        }
-    });
-    ui.add_space(8.0);
-}
+
 
 impl AiUsageApp {
     fn time_range_selector(&mut self, ui: &mut egui::Ui, c: &ThemeColors) {
