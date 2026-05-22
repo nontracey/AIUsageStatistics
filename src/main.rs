@@ -2,9 +2,11 @@
 
 mod models;
 mod readers;
+mod updater;
 
 use models::*;
 use readers::*;
+use updater::*;
 
 use chrono::{NaiveDate, Local, Datelike};
 use eframe::egui::{self, Color32, FontFamily, FontId, CornerRadius, Vec2, Margin, Align2, Frame, Sense};
@@ -340,6 +342,44 @@ pub struct AiUsageApp {
     tool_path_overrides: HashMap<String, String>,
 
     tool_textures: HashMap<String, egui::TextureHandle>,
+
+    update_status: String,
+    update_info: Option<UpdateInfo>,
+    update_downloaded: Option<std::path::PathBuf>,
+    update_rx: mpsc::Receiver<String>,
+}
+
+enum UpdateAction {
+    Check,
+    Download,
+}
+
+fn spawn_update(action: UpdateAction, url: String, asset_name: String) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = match action {
+            UpdateAction::Check => {
+                match check_for_update(env!("CARGO_PKG_VERSION")) {
+                    Ok(Some(info)) => format!("found:{}:{}:{}", info.version, info.download_url, info.asset_name),
+                    Ok(None) => "uptodate".into(),
+                    Err(e) => format!("error:{}", e),
+                }
+            }
+            UpdateAction::Download => {
+                let info = UpdateInfo {
+                    version: String::new(),
+                    download_url: url,
+                    asset_name,
+                };
+                match download_and_install(&info) {
+                    Ok(path) => format!("dl_ok:{}", path.display()),
+                    Err(e) => format!("dl_err:{}", e),
+                }
+            }
+        };
+        let _ = tx.send(result);
+    });
+    rx
 }
 
 impl Default for AiUsageApp {
@@ -415,6 +455,11 @@ impl Default for AiUsageApp {
             tool_path_overrides: config.tool_path_overrides.clone(),
 
             tool_textures: HashMap::new(),
+
+            update_status: String::new(),
+            update_info: None,
+            update_downloaded: None,
+            update_rx: mpsc::channel().1,
         }
     }
 }
@@ -569,6 +614,30 @@ impl AiUsageApp {
                 let cnt = self.records_by_cli.get(&result.cli_name).map(|v| v.len()).unwrap_or(0);
                 p.message = format!("Loaded {} records", cnt);
             });
+        }
+
+        while let Ok(msg) = self.update_rx.try_recv() {
+            if msg.starts_with("found:") {
+                let parts: Vec<&str> = msg.splitn(4, ':').collect();
+                if parts.len() == 4 {
+                    self.update_info = Some(UpdateInfo {
+                        version: parts[1].to_string(),
+                        download_url: parts[2].to_string(),
+                        asset_name: parts[3].to_string(),
+                    });
+                    self.update_status = format!("发现新版本 {}", parts[1]);
+                }
+            } else if msg == "uptodate" {
+                self.update_status = "已是最新版本".into();
+            } else if msg.starts_with("error:") {
+                self.update_status = msg.trim_start_matches("error:").to_string();
+            } else if msg.starts_with("dl_ok:") {
+                let path = msg.trim_start_matches("dl_ok:");
+                self.update_downloaded = Some(std::path::PathBuf::from(path));
+                self.update_status = "下载完成".into();
+            } else if msg.starts_with("dl_err:") {
+                self.update_status = msg.trim_start_matches("dl_err:").to_string();
+            }
         }
 
         if self.loading && !self.detected_clis.is_empty() {
@@ -821,7 +890,7 @@ impl AiUsageApp {
                 ui.separator();
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Version: {}", env!("CARGO_PKG_VERSION")))
+                    ui.label(egui::RichText::new(format!("{}: {}", self.tr("version"), env!("CARGO_PKG_VERSION")))
                         .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add(
@@ -831,6 +900,52 @@ impl AiUsageApp {
                             self.show_settings = false;
                         }
                     });
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("更新")
+                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(egui::RichText::new("检查更新").color(c.text_primary))
+                        .fill(c.surface3).corner_radius(CornerRadius::same(6))
+                    ).clicked() {
+                        self.update_status = "正在检查...".into();
+                        self.update_info = None;
+                        self.update_downloaded = None;
+                        self.update_rx = spawn_update(UpdateAction::Check, String::new(), String::new());
+                    }
+
+                    if !self.update_status.is_empty() {
+                        ui.label(egui::RichText::new(&self.update_status)
+                            .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
+                    }
+
+                    if let Some(info) = &self.update_info {
+                        if self.update_downloaded.is_none() {
+                            if ui.add(egui::Button::new(egui::RichText::new("下载更新").color(c.text_primary))
+                                .fill(c.accent.gamma_multiply(0.3)).corner_radius(CornerRadius::same(6))
+                            ).clicked() {
+                                self.update_status = "正在下载...".into();
+                                let url = info.download_url.clone();
+                                let name = info.asset_name.clone();
+                                self.update_rx = spawn_update(UpdateAction::Download, url, name);
+                            }
+                        } else {
+                            if ui.add(egui::Button::new(egui::RichText::new("立即更新").color(c.text_primary))
+                                .fill(c.green).corner_radius(CornerRadius::same(6))
+                            ).clicked() {
+                        let downloaded = self.update_downloaded.clone();
+                        if let Some(path) = downloaded {
+                            match apply_update(&path) {
+                                        Ok(()) => { self.update_status = "更新完成，请重启应用".into(); }
+                                        Err(e) => { self.update_status = format!("更新失败: {}", e); }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 });
             });
     }

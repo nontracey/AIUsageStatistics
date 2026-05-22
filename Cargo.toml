@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-statistics"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -16,3 +16,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 image = "0.25"
+ureq = "3"
+semver = "1.0"
+zip = "2"
+tar = "0.4"
+flate2 = "1"
