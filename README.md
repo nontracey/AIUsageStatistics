@@ -4,18 +4,20 @@
 
 ## 支持的 AI 工具
 
-| 工具 | 来源 |
-|---|---|
-| [opencode](https://opencode.ai) | SQLite 数据库 `~/.local/share/opencode/opencode.db` |
-| [Hermes](https://nousresearch.com) | SQLite 数据库 `~/.hermes/state.db` |
-| [Codex CLI](https://openai.com) | SQLite 数据库 `~/.codex/state_5.sqlite` |
-| [Claude Code](https://anthropic.com) | SQLite 数据库 `~/.claude/` |
-| [Qwen](https://qwen.alibaba.com) | SQLite 数据库 `~/.qwen/` |
+| 工具 | 来源 | 会话 ID |
+|------|------|---------|
+| [opencode](https://opencode.ai) | SQLite `~/.local/share/opencode/opencode.db` | `session.name` UUID |
+| [Hermes](https://nousresearch.com) | SQLite `~/.hermes/state.db` | `sessions.id` UUID |
+| [Codex CLI](https://openai.com) | SQLite `~/.codex/state_5.sqlite` | rollout 文件名 |
+| [Claude Code](https://anthropic.com) | JSON `~/.claude/usage-data/session-meta/*.json` | 文件名 UUID |
+| [Qwen](https://qwen.alibaba.com) | JSONL `~/.qwen/projects/*/chats/*.jsonl` | 聊天文件名 |
 
 ## 功能
 
 - **数据概览面板**：展示总 Token 数、缓存命中率、总请求数、活跃工具数
+- **工具使用排名**：首页右侧按总 Token 降序展示各工具排名（含 🥇🥈🥉）
 - **工具详情页**：按工具分页展示详细的模型用量、输入/输出 Token、缓存情况
+- **每次会话明细**：每个工具的详情页底部列出全部会话记录，含真实会话 ID、时间、模型、Token、缓存率，占满窗口
 - **模型用量明细表**：跨工具整合，展示每个模型的请求数、Token 数、缓存率、费用
 - **小时级趋势图**：折线图展示全天各小时的 Token 走势（含缓存命中）
 - **时间范围筛选**：今日 / 本周 / 本月 / 自定义日期
@@ -31,8 +33,8 @@
 │           eframe 窗口           │
 │  ┌───────────────────────────┐  │
 │  │     egui UI 层            │  │
-│  │  - 摘要面板               │  │
-│  │  - 工具标签页             │  │
+│  │  - 摘要面板 / 工具排名    │  │
+│  │  - 工具标签页 / 会话明细  │  │
 │  │  - 模型表格 / 趋势图      │  │
 │  │  - 设置弹窗               │  │
 │  └──────────┬────────────────┘  │
@@ -47,15 +49,15 @@
 │  └──────────┬────────────────┘  │
 │             │                   │
 │  ┌──────────▼────────────────┐  │
-│  │     SQLite（rusqlite）    │  │
-│  │  各工具本地数据库文件     │  │
+│  │     SQLite / JSON         │  │
+│  │  各工具本地数据文件       │  │
 │  └───────────────────────────┘  │
 └─────────────────────────────────┘
 ```
 
 - **UI 层**：egui + egui_plot 实现即时模式 GUI
 - **数据层**：Reader trait，每个工具一个实现，通过多线程并发读取
-- **存储层**：直接读取各工具的本地 SQLite 数据库，不依赖任何 API
+- **存储层**：直接读取各工具的本地数据库或 JSON 文件，不依赖任何 API
 - **配置持久化**：JSON 文件存储主题、语言、工具顺序、路径覆盖
 
 ## 安装环境
@@ -94,15 +96,15 @@ cargo build --release
 
 ### 切换视图
 
-- **概览标签页**：展示全局统计数据、各工具用量分栏、模型用量明细表、小时级趋势图
-- **工具标签页**：点击顶部工具按钮进入对应工具的详细视图
+- **概览标签页**：展示全局数据卡、工具使用排名、模型用量明细表、小时级趋势图
+- **工具标签页**：点击顶部工具按钮进入对应工具，查看模型分包和每次会话明细
 
 ### 设置
 
 点击右上角 ⚙ 进入设置：
 - 切换深色/浅色主题
 - 切换中文/English 语言
-- 调整工具显示顺序（上下按钮拖动）
+- 调整工具显示顺序
 - 覆盖工具数据库路径
 
 ### 配置存储

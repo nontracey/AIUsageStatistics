@@ -12,285 +12,206 @@
 
 ## 支持的 CLI 工具数据源
 
-| CLI | 数据路径 | 格式 | 关键字段 | 区分 CLI/GUI |
+| CLI | 数据路径 | 格式 | 会话 ID | 区分 CLI/GUI |
 |-----|---------|------|---------|-------------|
-| **opencode** | `~/.local/share/opencode/opencode.db` | SQLite | `tokens_input`, `tokens_output`, `tokens_cache_read`, `tokens_cache_write`, `tokens_reasoning`, `cost`, `model`(JSON), `time_created`, `agent` | `agent` 字段 |
-| **qwen** (Qwen Code) | `~/.qwen/projects/*/chats/*.jsonl` | JSONL | `usageMetadata.promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, `model` | 独立 VS Code 扩展路径 |
-| **claude** (Claude Code) | `~/.claude/usage-data/session-meta/*.json` + `stats-cache.json` | JSON | `input_tokens`, `output_tokens`, `model`, `start_time` | CLI vs Desktop 不同目录 |
-| **hermes** | `~/.hermes/state.db` | SQLite | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `model`, `started_at`, `source` | `source` 字段 |
-| **codex** (OpenAI Codex) | `~/.codex/state_5.sqlite` + `.codex/sessions/*/*.jsonl` | SQLite + JSONL | `threads.tokens_used`, `threads.model`, `threads.source`, JSONL 中 `input_token_details.cached_tokens` | `source` 字段 |
+| **opencode** | `~/.local/share/opencode/opencode.db` | SQLite | `session.name` UUID | `agent` 字段 |
+| **hermes** | `~/.hermes/state.db` | SQLite | `sessions.id` UUID | `source` 字段 |
+| **codex** (OpenAI Codex) | `~/.codex/state_5.sqlite` + `.codex/sessions/*/*.jsonl` | SQLite + JSONL | rollout 文件名 | `source` 字段 |
+| **claude** (Claude Code) | `~/.claude/usage-data/session-meta/*.json` + `stats-cache.json` | JSON | 文件名 UUID | CLI vs Desktop 不同目录 |
+| **qwen** (Qwen Code) | `~/.qwen/projects/*/chats/*.jsonl` | JSONL | 聊天文件名 | 独立 VS Code 扩展路径 |
 
 ## Adapter 模式
 
 每个 CLI 实现一个 `UsageReader` trait。读取逻辑在独立线程中异步执行，通过 channel 发送进度和结果。
 
 ```rust
-/// Adapter trait
 trait UsageReader: Send + Sync {
-    /// 工具名称
     fn name(&self) -> &'static str;
-
-    /// 是否已安装
     fn is_installed(&self) -> bool;
-
-    /// 读取指定日期范围的用量（内部通过 progress_tx 汇报进度）
-    fn read(
-        &self,
-        range: DateRange,
-        progress_tx: ProgressSender,
-    ) -> Result<Vec<UsageRecord>>;
+    fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord>;
 }
+```
 
-/// 进度汇报
-struct ProgressUpdate {
-    cli_name: String,
-    stage: ProgressStage,
-    percent: f32,       // 0.0 ~ 1.0
-    message: String,
-}
-
-enum ProgressStage {
-    Scanning,     // 扫描数据文件
-    Parsing,      // 解析中
-    Complete,     // 该工具读取完成
-    Error(String),// 出错
-}
-
-/// 统一聚合后的记录
+```rust
 struct UsageRecord {
+    session_id: String,        // 来自数据源的真实会话 ID
     cli_name: String,
-    source_type: SourceType,  // Cli | Gui | Unknown
+    source_type: SourceType,   // Cli | Gui | Unknown
     model_name: String,
     prompt_tokens: u64,
     completion_tokens: u64,
     total_tokens: u64,
-    cache_read_tokens: u64,   // 缓存命中 token
-    cache_write_tokens: u64,  // 缓存写入 token
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
     reasoning_tokens: u64,
     request_count: u64,
-    timestamp: DateTime<Utc>,
+    cost_cents: u64,
+    date: NaiveDate,
+    hour: u8,
+    timestamp: NaiveDateTime,
 }
-
-enum SourceType { Cli, Gui, Unknown }
 ```
 
-## 加载与进度机制
+## 加载与并发机制
 
 ```
 用户打开 GUI（默认当天）
     │
-    ├── 启动 N 个并行任务（每个已安装 CLI 一个）
+    ├── N 个并行线程（每个已安装 CLI 一个）
     │
-    ├── 任务 A: opencode ─── 开始扫描 ─── 解析中 ─── 完成  → 发结果到 chan
-    │   ├── progress: [===         ] 30%  "扫描 SQLite..."
-    │   ├── progress: [========    ] 60%  "解析 session..."
-    │   └── progress: [============] 100% "完成"
-    │
-    ├── 任务 B: qwen ─────── 开始扫描 ─── 解析中 ─── 完成  → 发结果到 chan
-    ├── 任务 C: claude ───── 开始扫描 ─── 解析中 ─── 完成  → 发结果到 chan
-    ├── 任务 D: hermes ───── 开始扫描 ─── 解析中 ─── 完成  → 发结果到 chan
-    └── 任务 E: codex ────── 开始扫描 ─── 解析中 ─── 完成  → 发结果到 chan
-                                │              │
-                                ▼              ▼
-                          ┌──────────┐  ┌──────────┐
-                          │ 进度条    │  │ 结果缓冲区│
-                          │ ProgressBar│  │ HashMap  │
-                          │ 实时更新  │  │ 按工具存储│
-                          └──────────┘  └─────┬────┘
-                                              │
-                    ┌─────────────────────────┤
-                    │                         │
-                    ▼                         ▼
-          ┌─────────────────┐       ┌─────────────────┐
-          │ 工具选项卡       │       │ 总计选项卡       │
-          │ 每完成一个就添加  │       │ 全部完成才展示    │
-          │ 立即渲染数据     │       │ 聚合所有工具数据  │
-          └─────────────────┘       └─────────────────┘
+    ├── Thread A: opencode ─── SQLite 查询 ─── 完成
+    ├── Thread B: qwen ─────── JSONL 解析 ─── 完成
+    ├── Thread C: claude ───── JSON 读取 ──── 完成
+    ├── Thread D: hermes ───── SQLite 查询 ─── 完成
+    └── Thread E: codex ────── SQLite + JSONL ─ 完成
+                                │
+                                ▼
+                          ┌──────────┐
+                          │ 结果队列  │
+                          │ mpsc chan │
+                          └─────┬────┘
+                                │ poll_channels() 每帧检查
+                                ▼
+                          ┌──────────┐
+                          │ 聚合数据  │
+                          │ rebuild  │
+                          └──────────┘
 ```
 
 ## GUI 布局
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  AI Usage Statistics - Token 用量统计           [─][□][×] │
-│                                                              │
-│  [今天 ●]  [本周]  [本月]  [自定义: 2026-05-01 ~ 2026-05-22] │
+│  AI 使用量统计  [今天][本周][本月][自定义]    [↻] [⚙]      │
+├──────────────────────────────────────────────────────────────┤
+│  [📈 概览]  [工具1]  [工具2]  [工具3] ...                   │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│  加载进度: ━━━━━━━━━━━━━━━━ 75%                              │
-│  ┌─ opencode  ████████████████████ 100%  423K tokens       ─┐│
-│  ├─ claude    ████████████████░░░░  80%                      ││
-│  ├─ hermes    ████████████████████ 100%  156K tokens       ─┘│
-│  ├─ qwen      ██████████░░░░░░░░░░  50%                      │
-│  └─ codex     ████░░░░░░░░░░░░░░░░  20%  解析 JSONL...      │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  [总计]  [opencode]  [claude]  [hermes]  [qwen]  [codex]   │
-├──────────────────────────────────────────────────────────────┤
+│  ┌────────────────────┐  ┌────────────────────┐            │
+│  │ 模型用量明细        │  │ 🏆 工具使用排名      │            │
+│  │ ────────────────    │  │ ────────────────   │            │
+│  │ 工具 模型 请求 ...  │  │ 🥇 #1 opencode      │            │
+│  │ opencode ds-v4  45  │  │ 🥈 #2 claude        │            │
+│  │ claude  sonnet  12  │  │ 🥉 #3 hermes        │            │
+│  └────────────────────┘  └────────────────────┘            │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  今日总览（等待所有工具加载完成...）                   │   │
-│  │                                                      │   │
-│  │  总 Token: 1,234,567   总缓存命中: 789,012 (64%)     │   │
-│  │                                                      │   │
-│  │  各工具占比:                                         │   │
-│  │  opencode ████████████████ 45%  556,055              │   │
-│  │  claude   ██████████      25%  308,641              │   │
-│  │  hermes   ███████         20%  246,913              │   │
-│  │  qwen     ████            10%  123,456              │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  工具明细 (opencode)                                   │   │
-│  │                                                      │   │
-│  │  模型              请求数    Token    缓存命中    占比   │   │
-│  │  ────────────────────────────────────────────────    │   │
-│  │  deepseek-v4-flash    45   234,567   187,654   80%    │   │
-│  │  glm-5                12    98,234     3,456    3%    │   │
-│  │  mistral-7b            8    56,789    45,678   80%    │   │
-│  │  ...                                                   │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  走势图                                               │   │
+│  │  小时级 Token 趋势图                                   │   │
 │  │  ┌─────────────────────────────────────────────┐    │   │
-│  │  │   ╱╲      ╱╲         （每小时 token 量）      │    │   │
-│  │  │  ╱  ╲    ╱  ╲    ╱╲                           │    │   │
-│  │  │ ╱    ╲  ╱    ╲  ╱  ╲                          │    │   │
-│  │  │╱      ╲╱      ╲╱    ╲                         │    │   │
+│  │  │  ╱╲      ╱╲                                  │    │   │
+│  │  │ ╱  ╲    ╱  ╲    ╱╲                           │    │   │
 │  │  └─────────────────────────────────────────────┘    │   │
-│  │  00:00  04:00  08:00  12:00  16:00  20:00  Now     │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  [工具详情页]                                                 │
+│  ┌─ 统计卡 ─────────────────────────────────────────────┐   │
+│  │ 💠 总Token: 234K   💿 缓存: 65%  💬 请求: 45  🤖 2模型│   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌─ 模型分包 ───────────────────────────────────────────┐   │
+│  │ 模型             请求   Token   输入   输出  缓存   % │   │
+│  │ deepseek-v4-flash  45  234,567  200K   34K  187K  80%│   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌─ 每次会话明细 ───────────────────────────────────────┐   │
+│  │ 会话 ID           时间        模型          Token   缓存%│   │
+│  │ 550e8400-e2…  2026-05-22 14  ds-v4-flash  12,345  76% │   │
+│  │ 08fa92c9-38…  2026-05-22 13  ds-v4-flash   8,901  45% │   │
+│  │ ...                                                    │   │
 │  └──────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## 关键设计决策
 
-### 1. 异步并发加载
+### 1. 多线程并发加载
 
 ```rust
-/// 加载管理器
-async fn load_all(
-    readers: Vec<Box<dyn UsageReader>>,
-    range: DateRange,
-) -> mpsc::Receiver<ReaderResult> {
-    let (result_tx, result_rx) = mpsc::channel(64);
-    let (progress_tx, _) = broadcast::channel(32);
-
+fn start_load(&mut self, range: DateRange) {
     for reader in readers {
-        let tx = result_tx.clone();
-        let range = range.clone();
-        tokio::spawn(async move {
-            let records = reader.read(range, progress_tx);
-            tx.send(ReaderResult {
-                cli_name: reader.name(),
-                records,
-            }).await;
+        let pt = progress_tx.clone();
+        let rt = result_tx.clone();
+        let rng = range.clone();
+        thread::spawn(move || {
+            let records = reader.read(&rng, &pt);
+            rt.send(ReaderResult { cli_name: reader.name(), records, error: None });
         });
     }
-
-    result_rx
 }
 ```
 
-### 2. 增量渲染
+每个 reader 在独立线程中运行，通过 `mpsc::channel` 向主线程发送进度和结果。主线程每帧调用 `poll_channels()` 检查并更新 UI。
+
+### 2. 增量聚合
 
 ```rust
-/// GUI 状态
-struct AppState {
-    // 已完成的 reader 结果（每完成一个立即插入）
-    reader_results: HashMap<String, ReaderResult>,
-    // 进度状态
-    progress: HashMap<String, ProgressState>,
-    // 全部是否完成
-    all_done: bool,
-    // 当前选中的 tab
-    selected_tab: Tab,
-    // 当前时间范围
-    date_range: DateRange,
-}
-
-// 每帧检查 channel，有新结果立即更新 UI
-fn update(&mut self, ctx: &egui::Context) {
-    while let Ok(result) = self.result_rx.try_recv() {
-        self.reader_results.insert(result.cli_name.clone(), result);
-        // 如果这个工具刚完成，自动切到它的 tab（首次）
-        // 工具栏新增一个 tab 按钮
-    }
-    while let Ok(progress) = self.progress_rx.try_recv() {
-        self.progress.insert(progress.cli_name.clone(), progress);
-    }
+fn rebuild_aggregates(&mut self) {
+    self.cli_summaries = aggregate_by_cli(&self.all_records);
+    self.model_breakdowns = aggregate_by_model(&self.all_records);
+    self.hourly_data = aggregate_hourly(&self.all_records);
 }
 ```
 
-### 3. 时间范围选择
+三个聚合维度：按工具汇总、按模型汇总、按小时汇总。每次新结果到达后重新计算。
+
+### 3. 会话 ID 追踪
+
+从各工具的数据源提取真实会话标识：
+
+| 工具 | 会话 ID | 实现 |
+|------|---------|------|
+| opencode | `session.name` (UUID) | SQL 加 `name` 列 |
+| hermes | `sessions.id` (UUID) | SQL 加 `id` 列 |
+| codex | `rollout_path` 文件名 | 文件路径 `file_stem()` |
+| claude | `session-meta/*.json` 文件名 | `path.file_stem()` |
+| qwen | `chats/*.jsonl` 文件名 | `path.file_stem()`
+
+### 4. 时间范围选择
 
 ```rust
-enum DateRange {
-    Today,
-    Week,        // 本周一 ~ 今天
-    Month,       // 本月1号 ~ 今天
-    Custom(NaiveDate, NaiveDate),
-}
-
-impl DateRange {
-    fn start_end(&self) -> (NaiveDate, NaiveDate) {
-        let today = Local::now().date_naive();
-        match self {
-            DateRange::Today => (today, today),
-            DateRange::Week => (today - Duration::days(today.weekday().num_days_from_monday() as i64), today),
-            DateRange::Month => (today.with_day(1).unwrap(), today),
-            DateRange::Custom(start, end) => (*start, *end),
-        }
-    }
+fn time_range_selector(&mut self, ui: &mut egui::Ui, c: &ThemeColors) {
+    // 水平按钮行：[今天][本周][本月][自定义]
+    // Custom 模式下追加：[2026-05-01] -> [2026-05-22] [应用]
+    // 弹出日历选择器 (egui::Area)
 }
 ```
 
-### 4. 缓存读取耗时优化
+自定义日期使用弹出式日历（`egui::Area`），支持月份翻页、今日高亮。
+
+### 5. 缓存读取耗时优化
 
 | 工具 | 主要耗时 | 优化策略 |
 |------|---------|---------|
 | opencode | SQLite 1 次查询 | ✅ 快 |
-| qwen | 扫描大量 JSONL 文件 | 缓存上次扫描位置，增量读取 |
-| claude | 读取 ~73 个 JSON 文件 | 并行读取，使用 `tokio::fs` |
 | hermes | SQLite 1 次查询 | ✅ 快 |
-| codex | SQLite 快 + JSONL 需额外解析 | 先从 SQLite 读 `tokens_used`，后台懒加载 JSONL 中的缓存数据 |
-
-对于 qwen 和 codex 的 JSONL：
-```
-第一次加载：全量扫描，记录每个文件的偏移量
-后续加载：只读新增内容（seeko 到上次位置）
-```
+| codex | SQLite 快 + JSONL 需额外解析 | 先从 SQLite 读 `tokens_used`，后台懒加载 JSONL |
+| claude | 读取 ~73 个 JSON 文件 | 并行读取 |
+| qwen | 扫描大量 JSONL 文件 | 逐行解析 |
 
 ## 项目结构
 
 ```
 ai-usage-statistics/
 ├── Cargo.toml
-├── crates/
-│   ├── core/                 # 数据模型 + 聚合引擎 + DateRange
-│   │   └── src/
-│   │       ├── models.rs     # UsageRecord, ProgressUpdate
-│   │       ├── aggregator.rs # 按工具/模型分组汇总
-│   │       └── range.rs      # DateRange
-│   ├── readers/              # 各 CLI adapter + 注册
-│   │   └── src/
-│   │       ├── lib.rs        # UsageReader trait + registry
-│   │       ├── opencode.rs
-│   │       ├── qwen.rs
-│   │       ├── claude.rs
-│   │       ├── hermes.rs
-│   │       └── codex.rs
-│   └── gui/                  # egui Dashboard
-│       └── src/
-│           ├── main.rs
-│           ├── app.rs        # AppState, 生命周期
-│           ├── dashboard.rs  # 总计 tab
-│           ├── cli_tab.rs    # 单个工具 tab
-│           ├── progress.rs   # 进度条组件
-│           └── timeline.rs   # 时间选择器
-└── docs/
-    └── ARCHITECTURE.md
+├── build/
+│   └── macos/
+│       ├── Info.plist          # .app bundle 元信息
+│       └── AppIcon.icns        # 应用图标 (1024x1024, dark neon chart)
+├── icons/
+│   ├── opencode.png            # 工具头像
+│   ├── claude.png
+│   ├── hermes.png
+│   ├── codex.png
+│   └── qwen.png
+├── src/
+│   ├── main.rs                 # 入口 + 全部 UI 逻辑 (~1600 行)
+│   ├── models.rs               # UsageRecord, 聚合函数, 格式化
+│   ├── readers.rs              # 5 个 UsageReader 实现 (~740 行)
+│   └── updater.rs              # 自动更新
+├── .github/workflows/
+│   └── release.yml             # 跨平台构建 + 发布
+├── README.md
+└── DESIGN.md
 ```
 
 ## 各 Adapter 实现要点
@@ -298,66 +219,60 @@ ai-usage-statistics/
 ### opencode
 
 ```sql
--- SQLite: 一次查询当天所有 session
 SELECT tokens_input, tokens_output, tokens_cache_read,
-       tokens_cache_write, tokens_reasoning, model, time_created
+       tokens_cache_write, tokens_reasoning, model, time_created,
+       cost, agent, name
 FROM session
-WHERE date(time_created / 1000, 'unixepoch') = ?
-ORDER BY time_created DESC;
+WHERE date(time_created / 1000, 'unixepoch') BETWEEN ?1 AND ?2
+ORDER BY time_created;
 ```
 
 ### hermes
 
 ```sql
--- SQLite: 一次查询当天所有 session
-SELECT input_tokens, output_tokens, cache_read_tokens,
-       cache_write_tokens, reasoning_tokens, model, started_at,
-       estimated_cost_usd
+SELECT model, input_tokens, output_tokens, cache_read_tokens,
+       cache_write_tokens, reasoning_tokens, started_at,
+       estimated_cost_usd, actual_cost_usd, source, id
 FROM sessions
-WHERE date(started_at, 'unixepoch') = ?
-ORDER BY started_at DESC;
+WHERE started_at BETWEEN ?1 AND ?2
+ORDER BY started_at;
 ```
 
 ### codex
 
 ```sql
--- SQLite: 查询当天 threads（快速）
 SELECT model, tokens_used, source, created_at, rollout_path
 FROM threads
-WHERE date(created_at, 'unixepoch') = ?;
-
--- JSONL: 从 rollout_path 的文件中解析缓存数据（后台懒加载）
--- 搜索 input_token_details.cached_tokens
--- 或 usageMetadata.cachedContentTokenCount（取决于 API 格式）
--- 汇总到对应 thread 的 cache_tokens 字段
+WHERE created_at BETWEEN ?1 AND ?2
+ORDER BY created_at;
 ```
+
+JSONL 中解析 `input_token_details.cached_tokens` 或 `usageMetadata.cachedContentTokenCount`。
 
 ### qwen
 
 ```rust
 // 遍历 ~/.qwen/projects/*/chats/*.jsonl
 // 每行 JSON，筛选 date 范围内的行
-// 提取 usageMetadata 或 ui_telemetry 事件
-// usageMetadata: promptTokenCount, candidatesTokenCount,
-//                totalTokenCount, cachedContentTokenCount
-// ui_telemetry:  input_token_count, output_token_count,
-//                cached_content_token_count
+// 提取 usageMetadata.promptTokenCount / candidatesTokenCount / totalTokenCount / cachedContentTokenCount
+// 或 ui_telemetry 事件的 input/output/cached_token_count
 ```
 
 ### claude
 
 ```rust
 // 读取 ~/.claude/usage-data/session-meta/*.json
-// 每个文件一个 session
+// 每个文件一个 session，文件名即会话 ID
 // input_tokens, output_tokens, model, start_time
-// 缓存数据在 stats-cache.json 有聚合值
-// 或从 JSONL 细粒度解析
+// stats-cache.json 提供模型级的缓存聚合值
 ```
 
 ## 技术要点
 
 1. **跨平台数据路径**：通过 `dirs`/`dirs-next` crate 统一处理各平台数据目录差异
 2. **只读访问**：所有 adapter 以只读方式操作，不修改任何数据
-3. **增量读取**：记录每个 JSONL 文件的读取偏移，下次只读新增行
+3. **会话 ID 提取**：尽可能从源数据获取真实标识（UUID），便于核对
 4. **优雅降级**：某个工具读取失败不影响其他工具，错误信息单独展示
-5. **首次加载缓存**：首次全量扫描后生成索引缓存，后续打开秒出
+5. **图标嵌入**：编译时 `include_bytes!` 将 `AppIcon.icns` 嵌入二进制，解析为 RGBA 设置到窗口
+6. **自定义日期**：弹出日历控件，支持月份翻页、选择后即时更新，需点击"应用"触发加载
+7. **工具排名**：首页模型明细右侧显示按总 Token 降序的工具排名，含排名图标和进度条
