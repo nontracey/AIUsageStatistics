@@ -36,7 +36,10 @@ fn platform_asset_pattern() -> &'static str {
 }
 
 pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, String> {
-    let url = format!("https://api.github.com/repos/{}/{}/releases/latest", OWNER, REPO);
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        OWNER, REPO
+    );
     let resp = ureq::Agent::new_with_defaults()
         .get(&url)
         .header("User-Agent", "AIUsageStatistics")
@@ -44,18 +47,24 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         .call()
         .map_err(|e| format!("请求失败: {}", e))?;
 
-    let body_text = resp.into_body()
+    let body_text = resp
+        .into_body()
         .read_to_string()
         .map_err(|e| format!("读取响应失败: {}", e))?;
 
-    let release: Release = serde_json::from_str(&body_text)
-        .map_err(|e| format!("解析响应失败: {}", e))?;
+    let release: Release =
+        serde_json::from_str(&body_text).map_err(|e| format!("解析响应失败: {}", e))?;
 
-    let latest_tag = release.tag_name.strip_prefix('v').unwrap_or(&release.tag_name);
+    let latest_tag = release
+        .tag_name
+        .strip_prefix('v')
+        .unwrap_or(&release.tag_name);
     let current = current_version.strip_prefix('v').unwrap_or(current_version);
 
-    let latest_ver = semver::Version::parse(latest_tag).map_err(|e| format!("版本号解析失败: {}", e))?;
-    let current_ver = semver::Version::parse(current).map_err(|e| format!("版本号解析失败: {}", e))?;
+    let latest_ver =
+        semver::Version::parse(latest_tag).map_err(|e| format!("版本号解析失败: {}", e))?;
+    let current_ver =
+        semver::Version::parse(current).map_err(|e| format!("版本号解析失败: {}", e))?;
 
     if latest_ver <= current_ver {
         return Ok(None);
@@ -66,7 +75,9 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         return Err("不支持的平台".into());
     }
 
-    let asset = release.assets.iter()
+    let asset = release
+        .assets
+        .iter()
         .find(|a| a.name.contains(pattern))
         .ok_or_else(|| format!("未找到 {} 的构建产物", pattern))?;
 
@@ -88,10 +99,9 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<PathBuf, String> {
         .map_err(|e| format!("下载失败: {}", e))?;
 
     let mut reader = resp.into_body().into_reader();
-    let mut file = std::fs::File::create(&archive_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
-    std::io::copy(&mut reader, &mut file)
-        .map_err(|e| format!("写入文件失败: {}", e))?;
+    let mut file =
+        std::fs::File::create(&archive_path).map_err(|e| format!("创建文件失败: {}", e))?;
+    std::io::copy(&mut reader, &mut file).map_err(|e| format!("写入文件失败: {}", e))?;
     drop(file);
 
     let extract_dir = temp_dir.join("extracted");
@@ -101,12 +111,13 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&extract_dir).map_err(|e| format!("创建目录失败: {}", e))?;
 
     if info.asset_name.ends_with(".zip") {
-        let zip_file = std::fs::File::open(&archive_path)
-            .map_err(|e| format!("打开压缩包失败: {}", e))?;
-        let mut archive = zip::ZipArchive::new(zip_file)
-            .map_err(|e| format!("读取压缩包失败: {}", e))?;
+        let zip_file =
+            std::fs::File::open(&archive_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
+        let mut archive =
+            zip::ZipArchive::new(zip_file).map_err(|e| format!("读取压缩包失败: {}", e))?;
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i)
+            let mut file = archive
+                .by_index(i)
                 .map_err(|e| format!("读取压缩包条目失败: {}", e))?;
             let out_path = extract_dir.join(file.name());
             if file.is_dir() {
@@ -115,22 +126,27 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<PathBuf, String> {
                 if let Some(parent) = out_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
                 }
-                let mut outfile = std::fs::File::create(&out_path)
-                    .map_err(|e| format!("创建文件失败: {}", e))?;
+                let mut outfile =
+                    std::fs::File::create(&out_path).map_err(|e| format!("创建文件失败: {}", e))?;
                 std::io::copy(&mut file, &mut outfile)
                     .map_err(|e| format!("解压文件失败: {}", e))?;
             }
         }
     } else {
-        let tar_gz = std::fs::File::open(&archive_path)
-            .map_err(|e| format!("打开压缩包失败: {}", e))?;
+        let tar_gz =
+            std::fs::File::open(&archive_path).map_err(|e| format!("打开压缩包失败: {}", e))?;
         let decoded = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(decoded);
-        archive.unpack(&extract_dir)
+        archive
+            .unpack(&extract_dir)
             .map_err(|e| format!("解压失败: {}", e))?;
     }
 
-    let binary_name = if cfg!(target_os = "windows") { "ai-usage-statistics.exe" } else { "ai-usage-statistics" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "ai-usage-statistics.exe"
+    } else {
+        "ai-usage-statistics"
+    };
     let downloaded_bin = extract_dir.join(binary_name);
 
     if !downloaded_bin.exists() {
@@ -138,9 +154,15 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<PathBuf, String> {
             Ok(d) => d.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
             Err(_) => vec![],
         };
-        let found = entries.iter().find(|p| {
-            p.file_name().and_then(|n| n.to_str()).map(|n| n.contains("ai-usage-statistics")).unwrap_or(false)
-        }).cloned();
+        let found = entries
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("ai-usage-statistics"))
+                    .unwrap_or(false)
+            })
+            .cloned();
         let bin = found.ok_or_else(|| "解压后未找到可执行文件".to_string())?;
         std::fs::rename(&bin, &downloaded_bin).map_err(|e| format!("重命名失败: {}", e))?;
     }
@@ -157,7 +179,9 @@ pub fn apply_update(new_binary: &std::path::Path) -> Result<(), String> {
     }
 
     if cfg!(target_os = "windows") {
-        let temp_new = std::env::temp_dir().join("ai-usage-stats-update").join("new.exe");
+        let temp_new = std::env::temp_dir()
+            .join("ai-usage-stats-update")
+            .join("new.exe");
         std::fs::copy(new_binary, &temp_new).map_err(|e| format!("复制到临时目录失败: {}", e))?;
         let batch = format!(
             "@echo off\n\
@@ -181,8 +205,11 @@ pub fn apply_update(new_binary: &std::path::Path) -> Result<(), String> {
             format!("复制新版本失败: {}", e)
         })?;
         #[cfg(unix)]
-        std::fs::set_permissions(&self_path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .map_err(|e| format!("设置权限失败: {}", e))?;
+        std::fs::set_permissions(
+            &self_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .map_err(|e| format!("设置权限失败: {}", e))?;
     }
 
     Ok(())

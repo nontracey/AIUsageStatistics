@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, NaiveDateTime, Datelike};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,20 +61,32 @@ pub struct DateRange {
 impl DateRange {
     pub fn today() -> Self {
         let now = chrono::Local::now().date_naive();
-        Self { range_type: DateRangeType::Today, start: now, end: now }
+        Self {
+            range_type: DateRangeType::Today,
+            start: now,
+            end: now,
+        }
     }
 
     pub fn this_week() -> Self {
         let now = chrono::Local::now().date_naive();
         let weekday = now.weekday().num_days_from_monday();
         let monday = now - chrono::Duration::days(weekday as i64);
-        Self { range_type: DateRangeType::Week, start: monday, end: now }
+        Self {
+            range_type: DateRangeType::Week,
+            start: monday,
+            end: now,
+        }
     }
 
     pub fn this_month() -> Self {
         let now = chrono::Local::now().date_naive();
         let first = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap();
-        Self { range_type: DateRangeType::Month, start: first, end: now }
+        Self {
+            range_type: DateRangeType::Month,
+            start: first,
+            end: now,
+        }
     }
 
     pub fn contains(&self, date: NaiveDate) -> bool {
@@ -116,10 +128,8 @@ pub fn aggregate_by_cli(records: &[UsageRecord]) -> Vec<CliSummary> {
 
     let mut result: Vec<CliSummary> = by_cli
         .into_iter()
-        .map(|(_, recs)| {
-            CliSummary {
-                total_tokens: recs.iter().map(|r| r.total_tokens).sum(),
-            }
+        .map(|(_, recs)| CliSummary {
+            total_tokens: recs.iter().map(|r| r.total_tokens).sum(),
         })
         .collect();
 

@@ -8,14 +8,16 @@ use models::*;
 use readers::*;
 use updater::*;
 
-use chrono::{NaiveDate, Local, Datelike};
-use eframe::egui::{self, Color32, FontFamily, FontId, CornerRadius, Vec2, Margin, Align2, Frame, Sense};
+use chrono::{Datelike, Local, NaiveDate};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontFamily, FontId, Frame, Margin, Sense, Vec2,
+};
 use egui_plot::{Line, Plot, PlotPoints};
 use image::GenericImageView;
-use std::collections::{HashMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // ─── Theme Colors ───────────────────────────────────────────────
 
@@ -102,7 +104,10 @@ fn tool_paths() -> Vec<(&'static str, String)> {
     let home = dirs::home_dir().unwrap_or_default();
     let home_str = home.to_string_lossy().to_string();
     vec![
-        ("opencode", format!("{}/.local/share/opencode/opencode.db", home_str)),
+        (
+            "opencode",
+            format!("{}/.local/share/opencode/opencode.db", home_str),
+        ),
         ("hermes", format!("{}/.hermes/state.db", home_str)),
         ("codex", format!("{}/.codex/state_5.sqlite", home_str)),
         ("claude", format!("{}/.claude", home_str)),
@@ -113,7 +118,10 @@ fn tool_paths() -> Vec<(&'static str, String)> {
 // ─── Language / i18n ───────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum Language { Chinese, English }
+enum Language {
+    Chinese,
+    English,
+}
 
 impl Language {
     fn label(self) -> &'static str {
@@ -233,7 +241,10 @@ fn tr(lang: Language, key: &str) -> &'static str {
 // ─── Theme ──────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum Theme { Dark, Light }
+enum Theme {
+    Dark,
+    Light,
+}
 
 impl Theme {
     fn colors(self) -> &'static ThemeColors {
@@ -266,7 +277,8 @@ impl Default for AppSettings {
 }
 
 fn config_dir() -> std::path::PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));
+    let base =
+        dirs::config_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));
     base.join("ai-usage-stats")
 }
 
@@ -309,7 +321,12 @@ struct DatePickerState {
 impl DatePickerState {
     fn new() -> Self {
         let now = Local::now();
-        Self { open: false, target: String::new(), year: now.year(), month: now.month() }
+        Self {
+            open: false,
+            target: String::new(),
+            year: now.year(),
+            month: now.month(),
+        }
     }
 }
 
@@ -366,13 +383,14 @@ fn spawn_update(action: UpdateAction, url: String, asset_name: String) -> mpsc::
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = match action {
-            UpdateAction::Check => {
-                match check_for_update(env!("CARGO_PKG_VERSION")) {
-                    Ok(Some(info)) => format!("found:{}:{}:{}", info.version, info.download_url, info.asset_name),
-                    Ok(None) => "uptodate".into(),
-                    Err(e) => format!("error:{}", e),
-                }
-            }
+            UpdateAction::Check => match check_for_update(env!("CARGO_PKG_VERSION")) {
+                Ok(Some(info)) => format!(
+                    "found:{}:{}:{}",
+                    info.version, info.download_url, info.asset_name
+                ),
+                Ok(None) => "uptodate".into(),
+                Err(e) => format!("error:{}", e),
+            },
             UpdateAction::Download => {
                 let info = UpdateInfo {
                     version: String::new(),
@@ -398,7 +416,7 @@ impl Default for AiUsageApp {
         let (progress_tx, progress_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
 
-        let readers = detect_readers();
+        let readers = detect_readers(&config.tool_path_overrides);
         let detected_names: Vec<String> = readers.iter().map(|r| r.name().to_string()).collect();
         let reader_count = readers.len();
 
@@ -453,7 +471,11 @@ impl Default for AiUsageApp {
             summary_total_requests: 0,
             models_cache: HashMap::new(),
 
-            load_start_time: if reader_count > 0 { Some(Instant::now()) } else { None },
+            load_start_time: if reader_count > 0 {
+                Some(Instant::now())
+            } else {
+                None
+            },
             last_refresh: Instant::now(),
 
             show_settings: false,
@@ -483,8 +505,14 @@ impl AiUsageApp {
 
     fn save_config(&self) {
         let config = AppSettings {
-            theme: match self.theme { Theme::Dark => "Dark".into(), Theme::Light => "Light".into() },
-            language: match self.language { Language::Chinese => "Chinese".into(), Language::English => "English".into() },
+            theme: match self.theme {
+                Theme::Dark => "Dark".into(),
+                Theme::Light => "Light".into(),
+            },
+            language: match self.language {
+                Language::Chinese => "Chinese".into(),
+                Language::English => "English".into(),
+            },
             tool_order: self.tool_order.clone(),
             tool_path_overrides: self.tool_path_overrides.clone(),
         };
@@ -511,12 +539,28 @@ impl AiUsageApp {
         egui::Image::from_texture(tex).paint_at(ui, rect);
     }
 
-    fn tool_avatar_tab(&self, ui: &mut egui::Ui, name: &str, selected: bool, accent: Color32, c: &ThemeColors) -> bool {
-        let bg = if selected { accent.gamma_multiply(0.3) } else { c.surface3 };
+    fn tool_avatar_tab(
+        &self,
+        ui: &mut egui::Ui,
+        name: &str,
+        selected: bool,
+        accent: Color32,
+        c: &ThemeColors,
+    ) -> bool {
+        let bg = if selected {
+            accent.gamma_multiply(0.3)
+        } else {
+            c.surface3
+        };
         let resp = ui.add(
-            egui::Button::new(egui::RichText::new(format!("      {}", name)).color(if selected { accent } else { c.text_secondary })
-                .font(FontId::new(13.0, FontFamily::Proportional)))
-                .fill(bg).corner_radius(CornerRadius::same(8)).frame(true)
+            egui::Button::new(
+                egui::RichText::new(format!("      {}", name))
+                    .color(if selected { accent } else { c.text_secondary })
+                    .font(FontId::new(13.0, FontFamily::Proportional)),
+            )
+            .fill(bg)
+            .corner_radius(CornerRadius::same(8))
+            .frame(true),
         );
         let center = resp.rect.left_center() + Vec2::new(10.0, 0.0);
         let icon_size = 16.0;
@@ -534,7 +578,9 @@ impl AiUsageApp {
         if self.tool_order.is_empty() {
             return self.detected_clis.clone();
         }
-        let mut ordered: Vec<String> = self.tool_order.iter()
+        let mut ordered: Vec<String> = self
+            .tool_order
+            .iter()
             .filter(|t| self.detected_clis.contains(t))
             .cloned()
             .collect();
@@ -560,7 +606,10 @@ impl AiUsageApp {
         self.models_cache.clear();
         for (name, records) in &self.records_by_cli {
             let models: BTreeSet<&str> = records.iter().map(|r| r.model_name.as_str()).collect();
-            self.models_cache.insert(name.clone(), models.iter().map(|s| *s).collect::<Vec<_>>().join(", "));
+            self.models_cache.insert(
+                name.clone(),
+                models.iter().map(|s| *s).collect::<Vec<_>>().join(", "),
+            );
         }
     }
 
@@ -578,8 +627,11 @@ impl AiUsageApp {
         self.progress_rx = progress_rx;
         self.result_rx = result_rx;
 
-        let readers = detect_readers();
-        let detected = readers.iter().map(|r| r.name().to_string()).collect::<Vec<_>>();
+        let readers = detect_readers(&self.tool_path_overrides);
+        let detected = readers
+            .iter()
+            .map(|r| r.name().to_string())
+            .collect::<Vec<_>>();
         if detected.is_empty() {
             self.loading = false;
             return;
@@ -604,24 +656,36 @@ impl AiUsageApp {
     fn poll_channels(&mut self) {
         while let Ok(update) = self.progress_rx.try_recv() {
             if update.done && update.error.is_some() {
-                self.load_errors.push(format!("{}: {}", update.cli_name,
-                    update.error.as_ref().unwrap()));
+                self.load_errors.push(format!(
+                    "{}: {}",
+                    update.cli_name,
+                    update.error.as_ref().unwrap()
+                ));
             }
-            self.progress_updates.insert(update.cli_name.clone(), update);
+            self.progress_updates
+                .insert(update.cli_name.clone(), update);
         }
 
         while let Ok(result) = self.result_rx.try_recv() {
             if let Some(err) = &result.error {
-                self.load_errors.push(format!("{}: {}", result.cli_name, err));
+                self.load_errors
+                    .push(format!("{}: {}", result.cli_name, err));
             }
-            self.records_by_cli.insert(result.cli_name.clone(), result.records.clone());
+            self.records_by_cli
+                .insert(result.cli_name.clone(), result.records.clone());
             self.all_records.extend(result.records);
-            self.progress_updates.entry(result.cli_name.clone()).and_modify(|p| {
-                p.done = true;
-                p.percent = 1.0;
-                let cnt = self.records_by_cli.get(&result.cli_name).map(|v| v.len()).unwrap_or(0);
-                p.message = format!("Loaded {} records", cnt);
-            });
+            self.progress_updates
+                .entry(result.cli_name.clone())
+                .and_modify(|p| {
+                    p.done = true;
+                    p.percent = 1.0;
+                    let cnt = self
+                        .records_by_cli
+                        .get(&result.cli_name)
+                        .map(|v| v.len())
+                        .unwrap_or(0);
+                    p.message = format!("Loaded {} records", cnt);
+                });
         }
 
         while let Ok(msg) = self.update_rx.try_recv() {
@@ -650,7 +714,10 @@ impl AiUsageApp {
 
         if self.loading && !self.detected_clis.is_empty() {
             let all_done = self.detected_clis.iter().all(|name| {
-                self.progress_updates.get(name).map(|p| p.done).unwrap_or(false)
+                self.progress_updates
+                    .get(name)
+                    .map(|p| p.done)
+                    .unwrap_or(false)
             });
             if all_done {
                 self.loading = false;
@@ -667,7 +734,9 @@ impl AiUsageApp {
     // ── Date Picker ────────────────────────────────────────────
 
     fn render_date_picker(&mut self, ctx: &egui::Context) {
-        if !self.date_picker.open { return; }
+        if !self.date_picker.open {
+            return;
+        }
 
         let c = self.tc();
         let target = self.date_picker.target.clone();
@@ -679,28 +748,55 @@ impl AiUsageApp {
                     fill: c.surface2,
                     corner_radius: CornerRadius::same(12),
                     stroke: egui::Stroke::new(1.0, c.surface3),
-                    shadow: egui::epaint::Shadow { offset: [0, 4], blur: 20, color: Color32::BLACK.gamma_multiply(0.3), ..Default::default() },
+                    shadow: egui::epaint::Shadow {
+                        offset: [0, 4],
+                        blur: 20,
+                        color: Color32::BLACK.gamma_multiply(0.3),
+                        ..Default::default()
+                    },
                     inner_margin: Margin::symmetric(16, 16),
                     ..Default::default()
-                }.show(ui, |ui| {
+                }
+                .show(ui, |ui| {
                     ui.set_min_width(260.0);
 
                     ui.horizontal(|ui| {
                         if ui.button("\u{25C0}").clicked() {
-                            if self.date_picker.month == 1 { self.date_picker.month = 12; self.date_picker.year -= 1; }
-                            else { self.date_picker.month -= 1; }
+                            if self.date_picker.month == 1 {
+                                self.date_picker.month = 12;
+                                self.date_picker.year -= 1;
+                            } else {
+                                self.date_picker.month -= 1;
+                            }
                         }
                         let month_str = match self.date_picker.month {
-                            1 => "January", 2 => "February", 3 => "March", 4 => "April",
-                            5 => "May", 6 => "June", 7 => "July", 8 => "August",
-                            9 => "September", 10 => "October", 11 => "November", 12 => "December",
+                            1 => "January",
+                            2 => "February",
+                            3 => "March",
+                            4 => "April",
+                            5 => "May",
+                            6 => "June",
+                            7 => "July",
+                            8 => "August",
+                            9 => "September",
+                            10 => "October",
+                            11 => "November",
+                            12 => "December",
                             _ => "",
                         };
-                        ui.label(egui::RichText::new(format!("{} {}", month_str, self.date_picker.year))
-                            .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                        ui.label(
+                            egui::RichText::new(format!("{} {}", month_str, self.date_picker.year))
+                                .font(FontId::new(14.0, FontFamily::Proportional))
+                                .color(c.text_primary)
+                                .strong(),
+                        );
                         if ui.button("\u{25B6}").clicked() {
-                            if self.date_picker.month == 12 { self.date_picker.month = 1; self.date_picker.year += 1; }
-                            else { self.date_picker.month += 1; }
+                            if self.date_picker.month == 12 {
+                                self.date_picker.month = 1;
+                                self.date_picker.year += 1;
+                            } else {
+                                self.date_picker.month += 1;
+                            }
                         }
                     });
 
@@ -708,7 +804,11 @@ impl AiUsageApp {
                     let day_names = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
                     ui.horizontal(|ui| {
                         for d in &day_names {
-                            ui.label(egui::RichText::new(*d).font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
+                            ui.label(
+                                egui::RichText::new(*d)
+                                    .font(FontId::new(11.0, FontFamily::Proportional))
+                                    .color(c.text_secondary),
+                            );
                             ui.add_space(8.0);
                         }
                     });
@@ -716,11 +816,19 @@ impl AiUsageApp {
                     let days_in_month = if self.date_picker.month == 12 {
                         NaiveDate::from_ymd_opt(self.date_picker.year + 1, 1, 1)
                     } else {
-                        NaiveDate::from_ymd_opt(self.date_picker.year, self.date_picker.month + 1, 1)
-                    }.map(|d| d.pred_opt().unwrap().day()).unwrap_or(31) as i32;
+                        NaiveDate::from_ymd_opt(
+                            self.date_picker.year,
+                            self.date_picker.month + 1,
+                            1,
+                        )
+                    }
+                    .map(|d| d.pred_opt().unwrap().day())
+                    .unwrap_or(31) as i32;
 
-                    let first_weekday = NaiveDate::from_ymd_opt(self.date_picker.year, self.date_picker.month, 1)
-                        .map(|d| d.weekday().num_days_from_monday()).unwrap_or(0);
+                    let first_weekday =
+                        NaiveDate::from_ymd_opt(self.date_picker.year, self.date_picker.month, 1)
+                            .map(|d| d.weekday().num_days_from_monday())
+                            .unwrap_or(0);
 
                     let now = Local::now().date_naive();
                     let mut day = 1;
@@ -729,25 +837,54 @@ impl AiUsageApp {
                         ui.horizontal(|ui| {
                             for col in 0..7 {
                                 if (row == 0 && col < first_weekday as i32) || day > days_in_month {
-                                    ui.allocate_ui_with_layout(Vec2::new(24.0, 24.0),
-                                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                                        |ui| { ui.label("  "); });
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(24.0, 24.0),
+                                        egui::Layout::centered_and_justified(
+                                            egui::Direction::LeftToRight,
+                                        ),
+                                        |ui| {
+                                            ui.label("  ");
+                                        },
+                                    );
                                 } else {
-                                    let date = NaiveDate::from_ymd_opt(self.date_picker.year, self.date_picker.month, day as u32).unwrap();
+                                    let date = NaiveDate::from_ymd_opt(
+                                        self.date_picker.year,
+                                        self.date_picker.month,
+                                        day as u32,
+                                    )
+                                    .unwrap();
                                     let is_today = date == now;
-                                    let selected = if &target == "start" { date == self.custom_start } else { date == self.custom_end };
+                                    let selected = if &target == "start" {
+                                        date == self.custom_start
+                                    } else {
+                                        date == self.custom_end
+                                    };
                                     let btn = egui::Button::new(
                                         egui::RichText::new(day.to_string())
                                             .font(FontId::new(12.0, FontFamily::Proportional))
-                                            .color(if is_today { c.accent } else if selected { c.surface } else { c.text_primary })
-                                            .strong()
-                                    ).min_size(Vec2::new(28.0, 24.0))
-                                        .fill(if selected { c.accent } else { egui::Color32::TRANSPARENT })
-                                        .corner_radius(CornerRadius::same(4))
-                                        .frame(true);
+                                            .color(if is_today {
+                                                c.accent
+                                            } else if selected {
+                                                c.surface
+                                            } else {
+                                                c.text_primary
+                                            })
+                                            .strong(),
+                                    )
+                                    .min_size(Vec2::new(28.0, 24.0))
+                                    .fill(if selected {
+                                        c.accent
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
+                                    .corner_radius(CornerRadius::same(4))
+                                    .frame(true);
                                     if ui.add(btn).clicked() {
-                                        if target == "start" { self.custom_start = date; }
-                                        else { self.custom_end = date; }
+                                        if target == "start" {
+                                            self.custom_start = date;
+                                        } else {
+                                            self.custom_end = date;
+                                        }
                                         self.date_picker.open = false;
                                     }
                                     day += 1;
@@ -758,7 +895,10 @@ impl AiUsageApp {
                     }
 
                     ui.add_space(8.0);
-                    if ui.button(egui::RichText::new("Close").color(c.text_secondary)).clicked() {
+                    if ui
+                        .button(egui::RichText::new("Close").color(c.text_secondary))
+                        .clicked()
+                    {
                         self.date_picker.open = false;
                     }
                 });
@@ -768,7 +908,9 @@ impl AiUsageApp {
     // ── Settings Window ────────────────────────────────────────
 
     fn render_settings(&mut self, ctx: &egui::Context) {
-        if !self.show_settings { return; }
+        if !self.show_settings {
+            return;
+        }
 
         let c = self.tc();
 
@@ -786,18 +928,37 @@ impl AiUsageApp {
                 ui.set_min_width(420.0);
 
                 // ── Theme ──
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F3A8}", self.tr("theme")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.label(
+                    egui::RichText::new(format!("{}  {}", "\u{1F3A8}", self.tr("theme")))
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    for (theme, key) in [(Theme::Dark, "theme_dark"), (Theme::Light, "theme_light")] {
+                    for (theme, key) in [(Theme::Dark, "theme_dark"), (Theme::Light, "theme_light")]
+                    {
                         let sel = self.theme == theme;
-                        let bg = if sel { c.accent.gamma_multiply(0.3) } else { c.surface3 };
-                        if ui.add(
-                            egui::Button::new(egui::RichText::new(self.tr(key))
-                                .color(if sel { c.accent } else { c.text_primary }))
-                                .fill(bg).corner_radius(CornerRadius::same(8)).frame(true)
-                        ).clicked() {
+                        let bg = if sel {
+                            c.accent.gamma_multiply(0.3)
+                        } else {
+                            c.surface3
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(self.tr(key)).color(if sel {
+                                        c.accent
+                                    } else {
+                                        c.text_primary
+                                    }),
+                                )
+                                .fill(bg)
+                                .corner_radius(CornerRadius::same(8))
+                                .frame(true),
+                            )
+                            .clicked()
+                        {
                             self.theme = theme;
                             self.save_config();
                         }
@@ -806,18 +967,36 @@ impl AiUsageApp {
                 ui.add_space(16.0);
 
                 // ── Language ──
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F310}", self.tr("language")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.label(
+                    egui::RichText::new(format!("{}  {}", "\u{1F310}", self.tr("language")))
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     for lang in [Language::Chinese, Language::English] {
                         let sel = self.language == lang;
-                        let bg = if sel { c.accent.gamma_multiply(0.3) } else { c.surface3 };
-                        if ui.add(
-                            egui::Button::new(egui::RichText::new(lang.label())
-                                .color(if sel { c.accent } else { c.text_primary }))
-                                .fill(bg).corner_radius(CornerRadius::same(8)).frame(true)
-                        ).clicked() {
+                        let bg = if sel {
+                            c.accent.gamma_multiply(0.3)
+                        } else {
+                            c.surface3
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(lang.label()).color(if sel {
+                                        c.accent
+                                    } else {
+                                        c.text_primary
+                                    }),
+                                )
+                                .fill(bg)
+                                .corner_radius(CornerRadius::same(8))
+                                .frame(true),
+                            )
+                            .clicked()
+                        {
                             self.language = lang;
                             self.save_config();
                         }
@@ -826,11 +1005,22 @@ impl AiUsageApp {
                 ui.add_space(16.0);
 
                 // ── Tool Order ──
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F504}", self.tr("tool_order_label")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}  {}",
+                        "\u{1F504}",
+                        self.tr("tool_order_label")
+                    ))
+                    .font(FontId::new(15.0, FontFamily::Proportional))
+                    .color(c.text_primary)
+                    .strong(),
+                );
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("(Drag via up/down buttons)")
-                    .font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
+                ui.label(
+                    egui::RichText::new("(Drag via up/down buttons)")
+                        .font(FontId::new(11.0, FontFamily::Proportional))
+                        .color(c.text_secondary),
+                );
 
                 let ordered = self.ordered_tools();
                 let mut changed = false;
@@ -839,18 +1029,38 @@ impl AiUsageApp {
                     ui.horizontal(|ui| {
                         self.tool_avatar(ui, name, 20.0);
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(name.clone()).color(cli_color(name, 255)).strong());
+                        ui.label(
+                            egui::RichText::new(name.clone())
+                                .color(cli_color(name, 255))
+                                .strong(),
+                        );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if i < ordered.len() - 1 {
-                                if ui.add(egui::Button::new("\u{25BC}").fill(c.surface3).corner_radius(CornerRadius::same(4)).frame(true)).clicked() {
+                                if ui
+                                    .add(
+                                        egui::Button::new("\u{25BC}")
+                                            .fill(c.surface3)
+                                            .corner_radius(CornerRadius::same(4))
+                                            .frame(true),
+                                    )
+                                    .clicked()
+                                {
                                     self.tool_order = ordered.clone();
                                     self.tool_order.swap(i, i + 1);
                                     changed = true;
                                 }
                             }
                             if i > 0 {
-                                if ui.add(egui::Button::new("\u{25B2}").fill(c.surface3).corner_radius(CornerRadius::same(4)).frame(true)).clicked() {
+                                if ui
+                                    .add(
+                                        egui::Button::new("\u{25B2}")
+                                            .fill(c.surface3)
+                                            .corner_radius(CornerRadius::same(4))
+                                            .frame(true),
+                                    )
+                                    .clicked()
+                                {
                                     self.tool_order = ordered.clone();
                                     self.tool_order.swap(i, i - 1);
                                     changed = true;
@@ -860,51 +1070,86 @@ impl AiUsageApp {
                     });
                     ui.add_space(2.0);
                 }
-                if changed { self.save_config(); }
+                if changed {
+                    self.save_config();
+                }
                 ui.add_space(16.0);
 
                 // ── Tool Paths ──
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F4C2}", self.tr("tool_paths")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.label(
+                    egui::RichText::new(format!("{}  {}", "\u{1F4C2}", self.tr("tool_paths")))
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(4.0);
 
                 let paths = tool_paths();
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    for (name, default_path) in &paths {
-                        let path = self.tool_path_overrides.get(*name).cloned().unwrap_or_else(|| default_path.clone());
-                        ui.horizontal(|ui| {
-                            self.tool_avatar(ui, name, 16.0);
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new(*name).color(cli_color(name, 255)).strong());
-                            if self.detected_clis.contains(&name.to_string()) {
-                                ui.label(egui::RichText::new("detected").font(FontId::new(11.0, FontFamily::Proportional)).color(c.green));
+                egui::ScrollArea::vertical()
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for (name, default_path) in &paths {
+                            let path = self
+                                .tool_path_overrides
+                                .get(*name)
+                                .cloned()
+                                .unwrap_or_else(|| default_path.clone());
+                            ui.horizontal(|ui| {
+                                self.tool_avatar(ui, name, 16.0);
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(*name)
+                                        .color(cli_color(name, 255))
+                                        .strong(),
+                                );
+                                if self.detected_clis.contains(&name.to_string()) {
+                                    ui.label(
+                                        egui::RichText::new("detected")
+                                            .font(FontId::new(11.0, FontFamily::Proportional))
+                                            .color(c.green),
+                                    );
+                                }
+                            });
+                            let mut path_edit = path.clone();
+                            ui.add_sized(
+                                Vec2::new(ui.available_width(), 22.0),
+                                egui::TextEdit::singleline(&mut path_edit)
+                                    .font(FontId::new(11.0, FontFamily::Monospace))
+                                    .desired_width(f32::INFINITY)
+                                    .text_color(c.text_secondary),
+                            );
+                            if path_edit != path {
+                                self.tool_path_overrides.insert(name.to_string(), path_edit);
+                                self.save_config();
                             }
-                        });
-                        let mut path_edit = path.clone();
-                        ui.add_sized(Vec2::new(ui.available_width(), 22.0),
-                            egui::TextEdit::singleline(&mut path_edit)
-                                .font(FontId::new(11.0, FontFamily::Monospace))
-                                .desired_width(f32::INFINITY).text_color(c.text_secondary)
-                        );
-                        if path_edit != path {
-                            self.tool_path_overrides.insert(name.to_string(), path_edit);
-                            self.save_config();
+                            ui.add_space(4.0);
                         }
-                        ui.add_space(4.0);
-                    }
-                });
+                    });
 
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("{}: {}", self.tr("version"), env!("CARGO_PKG_VERSION")))
-                        .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {}",
+                            self.tr("version"),
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                        .font(FontId::new(12.0, FontFamily::Proportional))
+                        .color(c.text_secondary),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(
-                            egui::Button::new(egui::RichText::new("Close").color(c.text_primary))
-                                .fill(c.surface3).corner_radius(CornerRadius::same(8))
-                        ).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Close").color(c.text_primary),
+                                )
+                                .fill(c.surface3)
+                                .corner_radius(CornerRadius::same(8)),
+                            )
+                            .clicked()
+                        {
                             self.show_settings = false;
                         }
                     });
@@ -912,43 +1157,76 @@ impl AiUsageApp {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("更新")
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                ui.label(
+                    egui::RichText::new("更新")
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(egui::RichText::new("检查更新").color(c.text_primary))
-                        .fill(c.surface3).corner_radius(CornerRadius::same(6))
-                    ).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("检查更新").color(c.text_primary),
+                            )
+                            .fill(c.surface3)
+                            .corner_radius(CornerRadius::same(6)),
+                        )
+                        .clicked()
+                    {
                         self.update_status = "正在检查...".into();
                         self.update_info = None;
                         self.update_downloaded = None;
-                        self.update_rx = spawn_update(UpdateAction::Check, String::new(), String::new());
+                        self.update_rx =
+                            spawn_update(UpdateAction::Check, String::new(), String::new());
                     }
 
                     if !self.update_status.is_empty() {
-                        ui.label(egui::RichText::new(&self.update_status)
-                            .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
+                        ui.label(
+                            egui::RichText::new(&self.update_status)
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(c.text_secondary),
+                        );
                     }
 
                     if let Some(info) = &self.update_info {
                         if self.update_downloaded.is_none() {
-                            if ui.add(egui::Button::new(egui::RichText::new("下载更新").color(c.text_primary))
-                                .fill(c.accent.gamma_multiply(0.3)).corner_radius(CornerRadius::same(6))
-                            ).clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("下载更新").color(c.text_primary),
+                                    )
+                                    .fill(c.accent.gamma_multiply(0.3))
+                                    .corner_radius(CornerRadius::same(6)),
+                                )
+                                .clicked()
+                            {
                                 self.update_status = "正在下载...".into();
                                 let url = info.download_url.clone();
                                 let name = info.asset_name.clone();
                                 self.update_rx = spawn_update(UpdateAction::Download, url, name);
                             }
                         } else {
-                            if ui.add(egui::Button::new(egui::RichText::new("立即更新").color(c.text_primary))
-                                .fill(c.green).corner_radius(CornerRadius::same(6))
-                            ).clicked() {
-                        let downloaded = self.update_downloaded.clone();
-                        if let Some(path) = downloaded {
-                            match apply_update(&path) {
-                                        Ok(()) => { self.update_status = "更新完成，请重启应用".into(); }
-                                        Err(e) => { self.update_status = format!("更新失败: {}", e); }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("立即更新").color(c.text_primary),
+                                    )
+                                    .fill(c.green)
+                                    .corner_radius(CornerRadius::same(6)),
+                                )
+                                .clicked()
+                            {
+                                let downloaded = self.update_downloaded.clone();
+                                if let Some(path) = downloaded {
+                                    match apply_update(&path) {
+                                        Ok(()) => {
+                                            self.update_status = "更新完成，请重启应用".into();
+                                        }
+                                        Err(e) => {
+                                            self.update_status = format!("更新失败: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -964,7 +1242,9 @@ impl AiUsageApp {
 impl eframe::App for AiUsageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_channels();
-        ctx.request_repaint();
+        if self.loading || self.update_status.starts_with("正在") {
+            ctx.request_repaint_after(Duration::from_millis(120));
+        }
 
         self.init_textures(ctx);
 
@@ -989,68 +1269,141 @@ impl eframe::App for AiUsageApp {
         self.render_settings(ctx);
 
         // ── Header ──
-        egui::TopBottomPanel::top("header").frame(Frame {
-            fill: c.surface2, inner_margin: Margin::symmetric(16, 12), ..Default::default()
-        }).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(self.tr("title"))
-                    .font(FontId::new(20.0, FontFamily::Proportional)).color(c.text_primary));
-                ui.add_space(16.0);
-                self.time_range_selector(ui, c);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("\u{2699}").fill(egui::Color32::TRANSPARENT)
-                        .corner_radius(CornerRadius::same(8)).frame(false)).clicked() {
-                        self.show_settings = !self.show_settings;
+        egui::TopBottomPanel::top("header")
+            .frame(Frame {
+                fill: c.surface2,
+                inner_margin: Margin::symmetric(16, 12),
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(self.tr("title"))
+                            .font(FontId::new(20.0, FontFamily::Proportional))
+                            .color(c.text_primary),
+                    );
+                    let status_text = if self.loading { "LIVE SCAN" } else { "READY" };
+                    let status_color = if self.loading {
+                        c.green
+                    } else {
+                        c.text_secondary
+                    };
+                    ui.label(
+                        egui::RichText::new(status_text)
+                            .font(FontId::new(10.0, FontFamily::Monospace))
+                            .color(status_color)
+                            .background_color(status_color.gamma_multiply(0.12)),
+                    );
+                    ui.add_space(16.0);
+                    self.time_range_selector(ui, c);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new("\u{2699}")
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .corner_radius(CornerRadius::same(8))
+                                    .frame(false),
+                            )
+                            .clicked()
+                        {
+                            self.show_settings = !self.show_settings;
+                        }
+                        ui.add_space(4.0);
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(self.tr("refresh")).color(c.text_primary),
+                                )
+                                .fill(c.surface3)
+                                .corner_radius(CornerRadius::same(6)),
+                            )
+                            .clicked()
+                        {
+                            self.start_load(self.date_range.clone());
+                        }
+                    });
+                });
+            });
+
+        // ── Tabs ──
+        egui::TopBottomPanel::top("tabs")
+            .frame(Frame {
+                fill: c.surface,
+                inner_margin: Margin::symmetric(16, 4),
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let sel = self.current_tab == Tab::Summary;
+                    if tab_button(ui, self.tr("summary_tab"), sel, c.accent, c) {
+                        self.current_tab = Tab::Summary;
                     }
-                    ui.add_space(4.0);
-                    if ui.add(egui::Button::new(egui::RichText::new(self.tr("refresh")).color(c.text_primary))
-                        .fill(c.surface3).corner_radius(CornerRadius::same(6))).clicked() {
-                        self.start_load(self.date_range.clone());
+                    let ordered = self.ordered_tools();
+                    for name in &ordered {
+                        let count = self.records_by_cli.get(name).map(|r| r.len()).unwrap_or(0);
+                        let selected = matches!(&self.current_tab, Tab::Tool(n) if n == name);
+                        let clr = cli_color(name, 255);
+                        if self.tool_avatar_tab(ui, name, selected, clr, c) {
+                            self.current_tab = Tab::Tool(name.clone());
+                        }
+                        if count > 0 {
+                            let total = self
+                                .records_by_cli
+                                .get(name)
+                                .map(|r| r.iter().map(|r| r.total_tokens).sum())
+                                .unwrap_or(0);
+                            ui.label(
+                                egui::RichText::new(format!("({})", format_tokens(total)))
+                                    .font(FontId::new(11.0, FontFamily::Proportional))
+                                    .color(c.text_secondary),
+                            );
+                        }
                     }
                 });
             });
-        });
-
-        // ── Tabs ──
-        egui::TopBottomPanel::top("tabs").frame(Frame {
-            fill: c.surface, inner_margin: Margin::symmetric(16, 4), ..Default::default()
-        }).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let sel = self.current_tab == Tab::Summary;
-                if tab_button(ui, self.tr("summary_tab"), sel, c.accent, c) {
-                    self.current_tab = Tab::Summary;
-                }
-                let ordered = self.ordered_tools();
-                for name in &ordered {
-                    let count = self.records_by_cli.get(name).map(|r| r.len()).unwrap_or(0);
-                    let selected = matches!(&self.current_tab, Tab::Tool(n) if n == name);
-                    let clr = cli_color(name, 255);
-                    if self.tool_avatar_tab(ui, name, selected, clr, c) {
-                        self.current_tab = Tab::Tool(name.clone());
-                    }
-                    if count > 0 {
-                        let total = self.records_by_cli.get(name)
-                            .map(|r| r.iter().map(|r| r.total_tokens).sum()).unwrap_or(0);
-                        ui.label(egui::RichText::new(format!("({})", format_tokens(total)))
-                            .font(FontId::new(11.0, FontFamily::Proportional)).color(c.text_secondary));
-                    }
-                }
-            });
-        });
 
         // ── Content ──
-        egui::CentralPanel::default().frame(Frame {
-            fill: c.surface, inner_margin: Margin::symmetric(24, 16), ..Default::default()
-        }).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.loading { self.render_loading(ui, c); }
-                match self.current_tab.clone() {
-                    Tab::Summary => self.render_summary(ui, c),
-                    Tab::Tool(ref name) => self.render_tool_tab(ui, name, c),
+        egui::CentralPanel::default()
+            .frame(Frame {
+                fill: c.surface,
+                inner_margin: Margin::symmetric(24, 16),
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                let bg = ui.max_rect();
+                let painter = ui.painter();
+                let grid = c.surface2.gamma_multiply(if self.theme == Theme::Dark {
+                    0.32
+                } else {
+                    0.70
+                });
+                let mut x = bg.left();
+                while x < bg.right() {
+                    painter.line_segment(
+                        [egui::pos2(x, bg.top()), egui::pos2(x, bg.bottom())],
+                        egui::Stroke::new(0.5, grid),
+                    );
+                    x += 48.0;
                 }
-                ui.add_space(40.0);
+                let mut y = bg.top();
+                while y < bg.bottom() {
+                    painter.line_segment(
+                        [egui::pos2(bg.left(), y), egui::pos2(bg.right(), y)],
+                        egui::Stroke::new(0.5, grid),
+                    );
+                    y += 48.0;
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if self.loading {
+                        self.render_loading(ui, c);
+                    }
+                    match self.current_tab.clone() {
+                        Tab::Summary => self.render_summary(ui, c),
+                        Tab::Tool(ref name) => self.render_tool_tab(ui, name, c),
+                    }
+                    ui.add_space(40.0);
+                });
             });
-        });
     }
 }
 
@@ -1059,55 +1412,126 @@ impl eframe::App for AiUsageApp {
 impl AiUsageApp {
     fn render_loading(&mut self, ui: &mut egui::Ui, c: &ThemeColors) {
         ui.add_space(8.0);
-        let elapsed = self.load_start_time.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
+        let elapsed = self
+            .load_start_time
+            .map(|t| t.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
 
         Frame {
-            fill: c.surface2, corner_radius: CornerRadius::same(12),
-            inner_margin: Margin::symmetric(20, 16), ..Default::default()
-        }.show(ui, |ui| {
+            fill: c.surface2,
+            corner_radius: CornerRadius::same(12),
+            inner_margin: Margin::symmetric(20, 16),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
             ui.heading(egui::RichText::new(self.tr("loading_title")).color(c.text_primary));
             ui.add_space(12.0);
 
             let total = self.detected_clis.len();
-            let done = self.detected_clis.iter()
-                .filter(|n| self.progress_updates.get(*n).map(|p| p.done).unwrap_or(false)).count();
-            let overall = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            let done = self
+                .detected_clis
+                .iter()
+                .filter(|n| {
+                    self.progress_updates
+                        .get(*n)
+                        .map(|p| p.done)
+                        .unwrap_or(false)
+                })
+                .count();
+            let overall = if total > 0 {
+                done as f32 / total as f32
+            } else {
+                0.0
+            };
 
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
-            ui.painter().rect_filled(rect, CornerRadius::same(12), c.surface3);
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(12), c.surface3);
             if overall > 0.0 {
-                let fill_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * overall, rect.height()));
+                let fill_rect = egui::Rect::from_min_size(
+                    rect.min,
+                    Vec2::new(rect.width() * overall, rect.height()),
+                );
                 let clr = if overall >= 1.0 { c.green } else { c.accent };
-                ui.painter().rect_filled(fill_rect, CornerRadius::same(12), clr);
+                ui.painter()
+                    .rect_filled(fill_rect, CornerRadius::same(12), clr);
+                if overall < 1.0 {
+                    let stripe_w = 56.0;
+                    let offset = (elapsed * 90.0) % stripe_w;
+                    let mut sx = fill_rect.left() - stripe_w + offset;
+                    while sx < fill_rect.right() {
+                        let stripe = egui::Rect::from_min_size(
+                            egui::pos2(sx, fill_rect.top()),
+                            Vec2::new(18.0, fill_rect.height()),
+                        );
+                        ui.painter().rect_filled(
+                            stripe.intersect(fill_rect),
+                            CornerRadius::same(8),
+                            Color32::WHITE.gamma_multiply(0.10),
+                        );
+                        sx += stripe_w;
+                    }
+                }
             }
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER,
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
                 &format!("{} / {} ({:.1}s)", done, total, elapsed),
-                FontId::new(13.0, FontFamily::Proportional), c.text_primary);
+                FontId::new(13.0, FontFamily::Proportional),
+                c.text_primary,
+            );
 
             ui.add_space(12.0);
 
             for name in &self.detected_clis {
                 let p = self.progress_updates.get(name);
                 let percent = p.map(|p| p.percent).unwrap_or(0.0);
-                let msg = p.map(|p| p.message.clone()).unwrap_or_else(|| "Waiting...".into());
+                let msg = p
+                    .map(|p| p.message.clone())
+                    .unwrap_or_else(|| "Waiting...".into());
                 let d = p.map(|p| p.done).unwrap_or(false);
                 let err = p.and_then(|p| p.error.clone());
 
                 ui.horizontal(|ui| {
-                    let icon = if d && err.is_none() { "\u{2705}" } else if err.is_some() { "\u{274C}" } else { "\u{23F3}" };
-                    ui.label(egui::RichText::new(format!("{} {}", icon, name))
-                        .font(FontId::new(13.0, FontFamily::Proportional)).color(cli_color(name, 255)));
+                    let icon = if d && err.is_none() {
+                        "\u{2705}"
+                    } else if err.is_some() {
+                        "\u{274C}"
+                    } else {
+                        "\u{23F3}"
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{} {}", icon, name))
+                            .font(FontId::new(13.0, FontFamily::Proportional))
+                            .color(cli_color(name, 255)),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(msg).font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_secondary));
+                        ui.label(
+                            egui::RichText::new(msg)
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(c.text_secondary),
+                        );
                     });
                 });
 
-                let bar_rect = egui::Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 6.0));
-                let bar_rect = egui::Rect::from_min_size(bar_rect.min + Vec2::new(0.0, 2.0), Vec2::new(bar_rect.width(), 6.0));
-                ui.painter().rect_filled(bar_rect, CornerRadius::same(3), c.surface3);
+                let bar_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    Vec2::new(ui.available_width(), 6.0),
+                );
+                let bar_rect = egui::Rect::from_min_size(
+                    bar_rect.min + Vec2::new(0.0, 2.0),
+                    Vec2::new(bar_rect.width(), 6.0),
+                );
+                ui.painter()
+                    .rect_filled(bar_rect, CornerRadius::same(3), c.surface3);
                 if percent > 0.0 {
-                    let fill = egui::Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * percent.min(1.0), bar_rect.height()));
-                    ui.painter().rect_filled(fill, CornerRadius::same(3), cli_color(name, 200));
+                    let fill = egui::Rect::from_min_size(
+                        bar_rect.min,
+                        Vec2::new(bar_rect.width() * percent.min(1.0), bar_rect.height()),
+                    );
+                    ui.painter()
+                        .rect_filled(fill, CornerRadius::same(3), cli_color(name, 200));
                 }
                 ui.add_space(6.0);
             }
@@ -1115,68 +1539,283 @@ impl AiUsageApp {
         ui.add_space(8.0);
     }
 
+    fn render_command_deck(&self, ui: &mut egui::Ui, c: &ThemeColors, cache_rate: f64) {
+        let top_tool = self
+            .records_by_cli
+            .iter()
+            .map(|(name, records)| {
+                (
+                    name.as_str(),
+                    records.iter().map(|r| r.total_tokens).sum::<u64>(),
+                    records.len(),
+                )
+            })
+            .max_by_key(|(_, tokens, _)| *tokens);
+
+        let deck_h = 236.0;
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), deck_h), Sense::hover());
+        let painter = ui.painter();
+        let rect = rect.shrink(1.0);
+
+        painter.rect(
+            rect,
+            CornerRadius::same(18),
+            c.surface2,
+            egui::Stroke::new(1.0, c.accent.gamma_multiply(0.42)),
+            egui::StrokeKind::Inside,
+        );
+
+        let top_band = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), rect.height() * 0.46));
+        painter.rect_filled(top_band, CornerRadius::same(18), c.accent.gamma_multiply(0.10));
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.min, Vec2::new(5.0, rect.height())),
+            CornerRadius::same(5),
+            c.accent_light,
+        );
+
+        for i in 0..7 {
+            let y = rect.top() + 20.0 + i as f32 * 28.0;
+            painter.line_segment(
+                [egui::pos2(rect.left() + 28.0, y), egui::pos2(rect.right() - 28.0, y)],
+                egui::Stroke::new(0.6, c.surface3.gamma_multiply(0.55)),
+            );
+        }
+
+        let left = rect.left() + 34.0;
+        painter.text(
+            egui::pos2(left, rect.top() + 28.0),
+            Align2::LEFT_TOP,
+            "AI USAGE COMMAND CENTER",
+            FontId::new(12.0, FontFamily::Monospace),
+            c.cyan,
+        );
+        painter.text(
+            egui::pos2(left, rect.top() + 62.0),
+            Align2::LEFT_TOP,
+            format_tokens_full(self.summary_total_tokens),
+            FontId::new(48.0, FontFamily::Proportional),
+            c.accent_light,
+        );
+        painter.text(
+            egui::pos2(left + 4.0, rect.top() + 124.0),
+            Align2::LEFT_TOP,
+            format!(
+                "{} requests  /  {:.1}% cache  /  {} active tools",
+                format_tokens_full(self.summary_total_requests),
+                cache_rate,
+                self.detected_clis.len()
+            ),
+            FontId::new(13.0, FontFamily::Proportional),
+            c.text_secondary,
+        );
+
+        let pulse_rect = egui::Rect::from_min_max(
+            egui::pos2(left, rect.bottom() - 66.0),
+            egui::pos2(rect.center().x + 120.0, rect.bottom() - 26.0),
+        );
+        let max_hour = self
+            .hourly_data
+            .iter()
+            .map(|p| p.total_tokens)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let bar_w = pulse_rect.width() / 24.0;
+        for hour in 0..24 {
+            let tokens = self
+                .hourly_data
+                .iter()
+                .find(|p| p.hour == hour)
+                .map(|p| p.total_tokens)
+                .unwrap_or(0);
+            let pct = tokens as f32 / max_hour as f32;
+            let x = pulse_rect.left() + hour as f32 * bar_w;
+            let h = 5.0 + pct * pulse_rect.height();
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(x + 2.0, pulse_rect.bottom() - h),
+                egui::pos2(x + bar_w - 3.0, pulse_rect.bottom()),
+            );
+            let color = if tokens > 0 { c.cyan } else { c.surface3 };
+            painter.rect_filled(bar, CornerRadius::same(3), color.gamma_multiply(0.35 + pct * 0.55));
+        }
+        painter.text(
+            pulse_rect.left_top() + Vec2::new(0.0, -18.0),
+            Align2::LEFT_TOP,
+            "24H TOKEN PULSE",
+            FontId::new(10.0, FontFamily::Monospace),
+            c.text_secondary,
+        );
+
+        let right_panel = egui::Rect::from_min_max(
+            egui::pos2(rect.right() - 320.0, rect.top() + 28.0),
+            egui::pos2(rect.right() - 28.0, rect.bottom() - 26.0),
+        );
+        painter.rect(
+            right_panel,
+            CornerRadius::same(14),
+            c.surface3.gamma_multiply(0.84),
+            egui::Stroke::new(1.0, c.cyan.gamma_multiply(0.38)),
+            egui::StrokeKind::Inside,
+        );
+
+        if let Some((name, tokens, sessions)) = top_tool {
+            let color = cli_color(name, 255);
+            let avatar_center = right_panel.left_top() + Vec2::new(36.0, 42.0);
+            painter.circle_filled(avatar_center, 22.0, color.gamma_multiply(0.18));
+            if let Some(tex) = self.tool_textures.get(name) {
+                let icon_rect = egui::Rect::from_center_size(avatar_center, Vec2::splat(26.0));
+                egui::Image::from_texture(tex).paint_at(ui, icon_rect);
+            } else {
+                painter.circle_filled(avatar_center, 12.0, color);
+            }
+            painter.text(
+                right_panel.left_top() + Vec2::new(72.0, 24.0),
+                Align2::LEFT_TOP,
+                "TOP TOOL",
+                FontId::new(10.0, FontFamily::Monospace),
+                c.text_secondary,
+            );
+            painter.text(
+                right_panel.left_top() + Vec2::new(72.0, 44.0),
+                Align2::LEFT_TOP,
+                name,
+                FontId::new(22.0, FontFamily::Proportional),
+                color,
+            );
+            painter.text(
+                right_panel.left_bottom() + Vec2::new(22.0, -58.0),
+                Align2::LEFT_BOTTOM,
+                format_tokens_full(tokens),
+                FontId::new(30.0, FontFamily::Proportional),
+                c.text_primary,
+            );
+            painter.text(
+                right_panel.left_bottom() + Vec2::new(24.0, -28.0),
+                Align2::LEFT_BOTTOM,
+                format!("{} sessions", sessions),
+                FontId::new(12.0, FontFamily::Proportional),
+                c.text_secondary,
+            );
+            let ring_center = right_panel.right_bottom() + Vec2::new(-48.0, -50.0);
+            paint_progress_ring(ui, ring_center, 30.0, (cache_rate as f32 / 100.0).clamp(0.0, 1.0), c.green, c.surface);
+            painter.text(
+                ring_center,
+                Align2::CENTER_CENTER,
+                format!("{:.0}%", cache_rate),
+                FontId::new(12.0, FontFamily::Monospace),
+                c.green,
+            );
+        }
+    }
+
     fn render_summary(&mut self, ui: &mut egui::Ui, c: &ThemeColors) {
         if self.all_records.is_empty() && !self.loading {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
-                ui.label(egui::RichText::new(self.tr("no_data_today"))
-                    .font(FontId::new(18.0, FontFamily::Proportional)).color(c.text_secondary));
-                ui.label(egui::RichText::new(self.tr("try_change_range"))
-                    .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_secondary));
+                ui.label(
+                    egui::RichText::new(self.tr("no_data_today"))
+                        .font(FontId::new(18.0, FontFamily::Proportional))
+                        .color(c.text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(self.tr("try_change_range"))
+                        .font(FontId::new(14.0, FontFamily::Proportional))
+                        .color(c.text_secondary),
+                );
             });
             return;
         }
-        if self.all_records.is_empty() { return; }
+        if self.all_records.is_empty() {
+            return;
+        }
 
         ui.add_space(4.0);
 
         // ── Stat Cards ──
         let cache_rate = if self.summary_total_tokens > 0 {
             self.summary_total_cache as f64 / self.summary_total_tokens as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
-        Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let cards = [
-                    ("total_tokens", &format_tokens_full(self.summary_total_tokens), c.accent_light, "\u{1F4A0}", None),
-                    ("cache_hit_rate", &format!("{:.1}%", cache_rate), c.green, "\u{1F4BF}", Some(cache_rate as f32 / 100.0)),
-                    ("total_requests", &format_tokens_full(self.summary_total_requests), c.cyan, "\u{1F4AC}", None),
-                    ("active_tools", &self.detected_clis.len().to_string(), c.yellow, "\u{1F916}", None),
-                ];
-                for (key, val, color, icon, bar) in &cards {
-                    let avail = (ui.available_width() - 16.0) / 4.0;
-                    let bg = color.gamma_multiply(0.12);
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.max(110.0), 80.0), egui::Sense::hover());
-                    let bg_rect = rect.shrink(2.0);
-                    let round = CornerRadius::same(10);
-                    ui.painter().rect(bg_rect, round, bg, egui::Stroke::new(1.0, color.gamma_multiply(0.25)), egui::StrokeKind::Inside);
-                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 12.0), egui::Align2::LEFT_TOP, *icon, FontId::new(18.0, FontFamily::Proportional), *color);
-                    ui.painter().text(egui::pos2(bg_rect.right() - 12.0, bg_rect.bottom() - 12.0), egui::Align2::RIGHT_BOTTOM, *val, FontId::new(22.0, FontFamily::Proportional), *color);
-                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, self.tr(key), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
-                    if let Some(pct) = bar {
-                        let bar_rect = egui::Rect::from_min_size(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 36.0), Vec2::new(bg_rect.width() - 24.0, 4.0));
-                        ui.painter().rect_filled(bar_rect, CornerRadius::same(2), c.surface3);
-                        if *pct > 0.0 {
-                            let fill = egui::Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * *pct, bar_rect.height()));
-                            ui.painter().rect_filled(fill, CornerRadius::same(2), *color);
-                        }
-                    }
-                    ui.add_space(12.0);
-                }
+        self.render_command_deck(ui, c, cache_rate);
+        ui.add_space(14.0);
+
+        Frame {
+            fill: c.surface2,
+            corner_radius: CornerRadius::same(14),
+            inner_margin: Margin::symmetric(16, 16),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
+            ui.columns(4, |cols| {
+                metric_card(
+                    &mut cols[0],
+                    self.tr("total_tokens"),
+                    &format_tokens_full(self.summary_total_tokens),
+                    c.accent_light,
+                    "\u{1F4A0}",
+                    None,
+                    c,
+                );
+                metric_card(
+                    &mut cols[1],
+                    self.tr("cache_hit_rate"),
+                    &format!("{:.1}%", cache_rate),
+                    c.green,
+                    "\u{25CC}",
+                    Some(cache_rate as f32 / 100.0),
+                    c,
+                );
+                metric_card(
+                    &mut cols[2],
+                    self.tr("total_requests"),
+                    &format_tokens_full(self.summary_total_requests),
+                    c.cyan,
+                    "\u{1F4AC}",
+                    None,
+                    c,
+                );
+                metric_card(
+                    &mut cols[3],
+                    self.tr("active_tools"),
+                    &self.detected_clis.len().to_string(),
+                    c.yellow,
+                    "\u{1F916}",
+                    None,
+                    c,
+                );
             });
         });
 
         ui.add_space(12.0);
 
         // ── Tool Breakdown ──
-        let tools_with_data: Vec<_> = self.ordered_tools().into_iter().filter(|n| {
-            self.records_by_cli.get(n).map(|r| !r.is_empty()).unwrap_or(false)
-        }).collect();
+        let tools_with_data: Vec<_> = self
+            .ordered_tools()
+            .into_iter()
+            .filter(|n| {
+                self.records_by_cli
+                    .get(n)
+                    .map(|r| !r.is_empty())
+                    .unwrap_or(false)
+            })
+            .collect();
 
         if !tools_with_data.is_empty() {
-            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F527}", self.tr("tool_breakdown")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+            Frame {
+                fill: c.surface2,
+                corner_radius: CornerRadius::same(14),
+                inner_margin: Margin::symmetric(16, 16),
+                ..Default::default()
+            }
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{}  {}", "\u{1F527}", self.tr("tool_breakdown")))
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(10.0);
 
                 for name in &tools_with_data {
@@ -1185,11 +1824,24 @@ impl AiUsageApp {
                     let cnt = records.len();
                     let clr = cli_color(name, 255);
                     let row_h = 48.0;
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), egui::Sense::hover());
-                    ui.painter().rect(rect, CornerRadius::same(8), c.surface3, egui::Stroke::new(1.0, c.surface2), egui::StrokeKind::Inside);
+                    let (rect, _) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), row_h),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect(
+                        rect,
+                        CornerRadius::same(8),
+                        c.surface3,
+                        egui::Stroke::new(1.0, c.surface2),
+                        egui::StrokeKind::Inside,
+                    );
 
-                    let left_strip = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0, rect.top() + 4.0), Vec2::new(3.0, rect.height() - 8.0));
-                    ui.painter().rect_filled(left_strip, CornerRadius::same(2), clr);
+                    let left_strip = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + 2.0, rect.top() + 4.0),
+                        Vec2::new(3.0, rect.height() - 8.0),
+                    );
+                    ui.painter()
+                        .rect_filled(left_strip, CornerRadius::same(2), clr);
 
                     let icon_pos = egui::pos2(rect.left() + 14.0, rect.top() + 14.0);
                     if let Some(tex) = self.tool_textures.get(name) {
@@ -1199,20 +1851,57 @@ impl AiUsageApp {
                         ui.painter().circle_filled(icon_pos, 8.0, clr);
                     }
 
-                    ui.painter().text(egui::pos2(rect.left() + 36.0, rect.top() + 14.0), egui::Align2::LEFT_CENTER, name.as_str(), FontId::new(14.0, FontFamily::Proportional), clr);
-                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.top() + 14.0), egui::Align2::RIGHT_CENTER, &format_tokens_full(total), FontId::new(15.0, FontFamily::Proportional), c.text_primary);
-                    ui.painter().text(egui::pos2(rect.right() - 10.0, rect.top() + 14.0 - 10.0), egui::Align2::RIGHT_CENTER, &format!("{} {}", cnt, self.tr("sessions")), FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 36.0, rect.top() + 14.0),
+                        egui::Align2::LEFT_CENTER,
+                        name.as_str(),
+                        FontId::new(14.0, FontFamily::Proportional),
+                        clr,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.right() - 10.0, rect.top() + 14.0),
+                        egui::Align2::RIGHT_CENTER,
+                        &format_tokens_full(total),
+                        FontId::new(15.0, FontFamily::Proportional),
+                        c.text_primary,
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.right() - 10.0, rect.top() + 14.0 - 10.0),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("{} {}", cnt, self.tr("sessions")),
+                        FontId::new(9.0, FontFamily::Proportional),
+                        c.text_secondary,
+                    );
 
                     let model_str: String = {
                         let tool_models = aggregate_by_model(records);
-                        tool_models.iter().map(|mb| {
-                            let mr = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                            let icon = if mr > 50.0 { "\u{26A1}" } else { "" };
-                            format!("{}{}({})", icon, mb.model_name, format_tokens(mb.total_tokens))
-                        }).collect::<Vec<_>>().join("  ")
+                        tool_models
+                            .iter()
+                            .map(|mb| {
+                                let mr = if mb.total_tokens > 0 {
+                                    mb.cache_read as f64 / mb.total_tokens as f64 * 100.0
+                                } else {
+                                    0.0
+                                };
+                                let icon = if mr > 50.0 { "\u{26A1}" } else { "" };
+                                format!(
+                                    "{}{}({})",
+                                    icon,
+                                    mb.model_name,
+                                    format_tokens(mb.total_tokens)
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ")
                     };
                     if !model_str.is_empty() {
-                        ui.painter().text(egui::pos2(rect.left() + 36.0, rect.top() + 34.0), egui::Align2::LEFT_CENTER, &model_str, FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 36.0, rect.top() + 34.0),
+                            egui::Align2::LEFT_CENTER,
+                            &model_str,
+                            FontId::new(9.0, FontFamily::Proportional),
+                            c.text_secondary,
+                        );
                     }
 
                     ui.add_space(6.0);
@@ -1227,38 +1916,115 @@ impl AiUsageApp {
             ui.columns(2, |cols| {
                 // Model Breakdown (left)
                 cols[0].vertical(|ui| {
-                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(14, 16), ..Default::default() }.show(ui, |ui| {
-                        ui.label(egui::RichText::new(format!("{}  {}", "\u{2699}", self.tr("model_breakdown")))
-                            .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                    Frame {
+                        fill: c.surface2,
+                        corner_radius: CornerRadius::same(14),
+                        inner_margin: Margin::symmetric(14, 16),
+                        ..Default::default()
+                    }
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}  {}",
+                                "\u{2699}",
+                                self.tr("model_breakdown")
+                            ))
+                            .font(FontId::new(14.0, FontFamily::Proportional))
+                            .color(c.text_primary)
+                            .strong(),
+                        );
                         ui.add_space(8.0);
 
-                        let headers = [self.tr("tool"), self.tr("model"), self.tr("requests"),
-                            self.tr("tokens"), self.tr("cache"), self.tr("cache_pct"), self.tr("cost")];
-                        let header_colors = [c.accent_light, c.text_secondary, c.text_secondary, c.accent_light, c.green, c.orange, c.text_secondary];
+                        let headers = [
+                            self.tr("tool"),
+                            self.tr("model"),
+                            self.tr("requests"),
+                            self.tr("tokens"),
+                            self.tr("cache"),
+                            self.tr("cache_pct"),
+                            self.tr("cost"),
+                        ];
+                        let header_colors = [
+                            c.accent_light,
+                            c.text_secondary,
+                            c.text_secondary,
+                            c.accent_light,
+                            c.green,
+                            c.orange,
+                            c.text_secondary,
+                        ];
 
                         egui::ScrollArea::horizontal().show(ui, |ui| {
                             egui::Grid::new("model_grid").striped(false).show(ui, |ui| {
                                 for (h, hc) in headers.iter().zip(header_colors.iter()) {
-                                    ui.label(egui::RichText::new(*h).font(FontId::new(10.0, FontFamily::Proportional)).color(*hc).strong());
+                                    ui.label(
+                                        egui::RichText::new(*h)
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(*hc)
+                                            .strong(),
+                                    );
                                 }
                                 ui.end_row();
 
                                 for mb in &self.model_breakdowns {
-                                    let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                                    let cost_str = if mb.cost_cents > 0 { format!("${:.2}", mb.cost_cents as f64 / 100.0) } else { "-".into() };
-                                    let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
+                                    let cache_pct = if mb.total_tokens > 0 {
+                                        mb.cache_read as f64 / mb.total_tokens as f64 * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    let cost_str = if mb.cost_cents > 0 {
+                                        format!("${:.2}", mb.cost_cents as f64 / 100.0)
+                                    } else {
+                                        "-".into()
+                                    };
+                                    let ccol = if cache_pct > 50.0 {
+                                        c.green
+                                    } else if cache_pct > 20.0 {
+                                        c.yellow
+                                    } else {
+                                        c.orange
+                                    };
 
                                     ui.horizontal(|ui| {
                                         self.tool_avatar(ui, &mb.cli_name, 10.0);
                                         ui.add_space(2.0);
-                                        ui.label(egui::RichText::new(&mb.cli_name).font(FontId::new(10.0, FontFamily::Proportional)).color(cli_color(&mb.cli_name, 255)));
+                                        ui.label(
+                                            egui::RichText::new(&mb.cli_name)
+                                                .font(FontId::new(10.0, FontFamily::Proportional))
+                                                .color(cli_color(&mb.cli_name, 255)),
+                                        );
                                     });
-                                    ui.label(egui::RichText::new(&mb.model_name).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_primary));
-                                    ui.label(egui::RichText::new(&mb.request_count.to_string()).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_secondary));
-                                    ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_primary).strong());
-                                    ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read)).font(FontId::new(10.0, FontFamily::Proportional)).color(ccol));
-                                    ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(10.0, FontFamily::Proportional)).color(ccol));
-                                    ui.label(egui::RichText::new(&cost_str).font(FontId::new(10.0, FontFamily::Proportional)).color(c.text_secondary));
+                                    ui.label(
+                                        egui::RichText::new(&mb.model_name)
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(c.text_primary),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(&mb.request_count.to_string())
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(c.text_secondary),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(&format_tokens_full(mb.total_tokens))
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(c.text_primary)
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(&format_tokens_full(mb.cache_read))
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(ccol),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(&format!("{:.0}%", cache_pct))
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(ccol),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(&cost_str)
+                                            .font(FontId::new(10.0, FontFamily::Proportional))
+                                            .color(c.text_secondary),
+                                    );
                                     ui.end_row();
                                 }
                             });
@@ -1268,7 +2034,8 @@ impl AiUsageApp {
 
                 // Tool Ranking (right)
                 cols[1].vertical(|ui| {
-                    let mut tool_agg: std::collections::BTreeMap<&str, (u64, u64, u64)> = std::collections::BTreeMap::new();
+                    let mut tool_agg: std::collections::BTreeMap<&str, (u64, u64, u64)> =
+                        std::collections::BTreeMap::new();
                     for mb in &self.model_breakdowns {
                         let e = tool_agg.entry(&mb.cli_name).or_default();
                         e.0 += mb.total_tokens;
@@ -1276,35 +2043,109 @@ impl AiUsageApp {
                         e.2 += mb.request_count;
                     }
                     let mut tool_rank: Vec<_> = tool_agg.into_iter().collect();
-                    tool_rank.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+                    tool_rank.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
 
-                    Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(14, 16), ..Default::default() }.show(ui, |ui| {
-                        ui.label(egui::RichText::new(format!("{}  {}", "\u{1F3C6}", self.tr("tool_ranking")))
-                            .font(FontId::new(14.0, FontFamily::Proportional)).color(c.text_primary).strong());
+                    Frame {
+                        fill: c.surface2,
+                        corner_radius: CornerRadius::same(14),
+                        inner_margin: Margin::symmetric(14, 16),
+                        ..Default::default()
+                    }
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}  {}",
+                                "\u{1F3C6}",
+                                self.tr("tool_ranking")
+                            ))
+                            .font(FontId::new(14.0, FontFamily::Proportional))
+                            .color(c.text_primary)
+                            .strong(),
+                        );
                         ui.add_space(8.0);
 
-                        let max_tokens = tool_rank.first().map(|t| t.1.0).unwrap_or(1).max(1);
+                        let max_tokens = tool_rank.first().map(|t| t.1 .0).unwrap_or(1).max(1);
                         for (i, (name, (tokens, _cache, reqs))) in tool_rank.iter().enumerate() {
                             let clr = cli_color(name, 255);
                             let pct = *tokens as f32 / max_tokens as f32;
-                            let rank_icon = if i == 0 { "\u{1F947}" } else if i == 1 { "\u{1F948}" } else if i == 2 { "\u{1F949}" } else { "" };
-                            let row_h = 38.0;
-                            let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), egui::Sense::hover());
-                            ui.painter().rect(rect, CornerRadius::same(6), c.surface3, egui::Stroke::new(1.0, c.surface2), egui::StrokeKind::Inside);
+                            let rank_icon = if i == 0 {
+                                "\u{1F947}"
+                            } else if i == 1 {
+                                "\u{1F948}"
+                            } else if i == 2 {
+                                "\u{1F949}"
+                            } else {
+                                ""
+                            };
+                            let row_h = 44.0;
+                            let (rect, _) = ui.allocate_exact_size(
+                                Vec2::new(ui.available_width(), row_h),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect(
+                                rect,
+                                CornerRadius::same(8),
+                                c.surface3,
+                                egui::Stroke::new(1.0, clr.gamma_multiply(0.22)),
+                                egui::StrokeKind::Inside,
+                            );
 
-                            let bar_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * pct, rect.height()));
-                            ui.painter().rect_filled(bar_rect, CornerRadius::same(6), clr.gamma_multiply(0.10));
+                            let bar_rect = egui::Rect::from_min_size(
+                                rect.min,
+                                Vec2::new(rect.width() * pct, rect.height()),
+                            );
+                            ui.painter().rect_filled(
+                                bar_rect,
+                                CornerRadius::same(8),
+                                clr.gamma_multiply(0.14),
+                            );
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(
+                                    rect.left_top() + Vec2::new(0.0, rect.height() - 3.0),
+                                    Vec2::new(rect.width() * pct, 3.0),
+                                ),
+                                CornerRadius::same(2),
+                                clr.gamma_multiply(0.90),
+                            );
 
                             let label_x = rect.left() + 10.0;
-                            ui.painter().text(egui::pos2(label_x, rect.center().y), egui::Align2::LEFT_CENTER,
-                                &format!("{} #{}", rank_icon, i + 1), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
-                            let name_x = label_x + if rank_icon.is_empty() { 24.0 } else { 32.0 };
-                            ui.painter().text(egui::pos2(name_x, rect.center().y), egui::Align2::LEFT_CENTER,
-                                name, FontId::new(13.0, FontFamily::Proportional), clr);
-                            ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y - 6.0), egui::Align2::RIGHT_CENTER,
-                                &format_tokens_full(*tokens), FontId::new(12.0, FontFamily::Proportional), c.text_primary);
-                            ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y + 8.0), egui::Align2::RIGHT_CENTER,
-                                &format!("{} {}", reqs, self.tr("requests")), FontId::new(9.0, FontFamily::Proportional), c.text_secondary);
+                            ui.painter().text(
+                                egui::pos2(label_x, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &format!("{} #{}", rank_icon, i + 1),
+                                FontId::new(10.0, FontFamily::Proportional),
+                                c.text_secondary,
+                            );
+                            let avatar_center = egui::pos2(label_x + 44.0, rect.center().y);
+                            if let Some(tex) = self.tool_textures.get(*name) {
+                                let icon_rect =
+                                    egui::Rect::from_center_size(avatar_center, Vec2::splat(20.0));
+                                egui::Image::from_texture(tex).paint_at(ui, icon_rect);
+                            } else {
+                                ui.painter().circle_filled(avatar_center, 10.0, clr);
+                            }
+                            let name_x = label_x + 62.0;
+                            ui.painter().text(
+                                egui::pos2(name_x, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                name,
+                                FontId::new(13.0, FontFamily::Proportional),
+                                clr,
+                            );
+                            ui.painter().text(
+                                egui::pos2(rect.right() - 8.0, rect.center().y - 6.0),
+                                egui::Align2::RIGHT_CENTER,
+                                &format_tokens_full(*tokens),
+                                FontId::new(12.0, FontFamily::Proportional),
+                                c.text_primary,
+                            );
+                            ui.painter().text(
+                                egui::pos2(rect.right() - 8.0, rect.center().y + 8.0),
+                                egui::Align2::RIGHT_CENTER,
+                                &format!("{} {}", reqs, self.tr("requests")),
+                                FontId::new(9.0, FontFamily::Proportional),
+                                c.text_secondary,
+                            );
                             ui.add_space(4.0);
                         }
                     });
@@ -1316,23 +2157,53 @@ impl AiUsageApp {
 
         // ── Hourly Trend Chart ──
         if !self.hourly_data.is_empty() {
-            Frame { fill: c.surface2, corner_radius: CornerRadius::same(14), inner_margin: Margin::symmetric(16, 16), ..Default::default() }.show(ui, |ui| {
-                ui.label(egui::RichText::new(format!("{}  {}", "\u{1F4C8}", self.tr("hourly_chart")))
-                    .font(FontId::new(15.0, FontFamily::Proportional)).color(c.text_primary).strong());
+            Frame {
+                fill: c.surface2,
+                corner_radius: CornerRadius::same(14),
+                inner_margin: Margin::symmetric(16, 16),
+                ..Default::default()
+            }
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{}  {}", "\u{1F4C8}", self.tr("hourly_chart")))
+                        .font(FontId::new(15.0, FontFamily::Proportional))
+                        .color(c.text_primary)
+                        .strong(),
+                );
                 ui.add_space(10.0);
 
-                let points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.total_tokens as f64]).collect();
-                let cache_points: Vec<[f64; 2]> = self.hourly_data.iter().map(|p| [p.hour as f64, p.cache_hit as f64]).collect();
+                let points: Vec<[f64; 2]> = self
+                    .hourly_data
+                    .iter()
+                    .map(|p| [p.hour as f64, p.total_tokens as f64])
+                    .collect();
+                let cache_points: Vec<[f64; 2]> = self
+                    .hourly_data
+                    .iter()
+                    .map(|p| [p.hour as f64, p.cache_hit as f64])
+                    .collect();
 
                 let line_total = Line::new(PlotPoints::from(points.clone()))
-                    .color(c.accent_light).width(2.5).name("Total Tokens")
+                    .color(c.accent_light)
+                    .width(2.5)
+                    .name("Total Tokens")
                     .fill(0.15);
                 let line_cache = Line::new(PlotPoints::from(cache_points))
-                    .color(c.green).width(2.0).name("Cache Hit").highlight(true);
+                    .color(c.green)
+                    .width(2.0)
+                    .name("Cache Hit")
+                    .highlight(true);
 
-                Plot::new("hourly_chart").height(200.0).show_background(false).show_axes(true).show_grid(true)
-                    .x_axis_label("Hour").y_axis_label("Tokens").show(ui, |plot_ui| {
-                        plot_ui.line(line_total); plot_ui.line(line_cache);
+                Plot::new("hourly_chart")
+                    .height(200.0)
+                    .show_background(false)
+                    .show_axes(true)
+                    .show_grid(true)
+                    .x_axis_label("Hour")
+                    .y_axis_label("Tokens")
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(line_total);
+                        plot_ui.line(line_cache);
                     });
             });
         }
@@ -1342,7 +2213,14 @@ impl AiUsageApp {
         let records = match self.records_by_cli.get(cli_name) {
             Some(r) => r,
             None => {
-                ui.label(egui::RichText::new(if self.loading { self.tr("loading") } else { self.tr("no_data") }).color(c.text_secondary));
+                ui.label(
+                    egui::RichText::new(if self.loading {
+                        self.tr("loading")
+                    } else {
+                        self.tr("no_data")
+                    })
+                    .color(c.text_secondary),
+                );
                 return;
             }
         };
@@ -1362,78 +2240,163 @@ impl AiUsageApp {
         let clr = cli_color(cli_name, 255);
 
         // Header
-        Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 20), ..Default::default() }.show(ui, |ui| {
+        Frame {
+            fill: c.surface2,
+            corner_radius: CornerRadius::same(12),
+            inner_margin: Margin::symmetric(20, 20),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
                 self.tool_avatar(ui, cli_name, 28.0);
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(cli_name).font(FontId::new(20.0, FontFamily::Proportional)).color(clr));
-                ui.label(egui::RichText::new(format!("{} {} / {} {}", models.len(), self.tr("model"),
-                    records.len(), self.tr("sessions")))
-                    .font(FontId::new(13.0, FontFamily::Proportional)).color(c.text_secondary));
+                ui.label(
+                    egui::RichText::new(cli_name)
+                        .font(FontId::new(20.0, FontFamily::Proportional))
+                        .color(clr),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} {} / {} {}",
+                        models.len(),
+                        self.tr("model"),
+                        records.len(),
+                        self.tr("sessions")
+                    ))
+                    .font(FontId::new(13.0, FontFamily::Proportional))
+                    .color(c.text_secondary),
+                );
             });
             ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let tool_cards = [
-                    ("total_tokens", &format_tokens_full(total_tokens), clr, "\u{1F4A0}", None),
-                    ("cache_hit_rate", &format!("{:.1}%", if total_tokens > 0 { total_cache as f64 / total_tokens as f64 * 100.0 } else { 0.0 }), c.green, "\u{1F4BF}", Some(if total_tokens > 0 { total_cache as f32 / total_tokens as f32 } else { 0.0 })),
-                    ("total_requests", &total_req.to_string(), c.cyan, "\u{1F4AC}", None),
-                    ("model", &models.len().to_string(), c.yellow, "\u{1F916}", None),
-                ];
-                for (key, val, color, icon, bar) in &tool_cards {
-                    let avail = (ui.available_width() - 16.0) / 4.0;
-                    let bg = color.gamma_multiply(0.12);
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.max(110.0), 80.0), egui::Sense::hover());
-                    let bg_rect = rect.shrink(2.0);
-                    let round = CornerRadius::same(10);
-                    ui.painter().rect(bg_rect, round, bg, egui::Stroke::new(1.0, color.gamma_multiply(0.25)), egui::StrokeKind::Inside);
-                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 12.0), egui::Align2::LEFT_TOP, *icon, FontId::new(18.0, FontFamily::Proportional), *color);
-                    ui.painter().text(egui::pos2(bg_rect.right() - 12.0, bg_rect.bottom() - 12.0), egui::Align2::RIGHT_BOTTOM, *val, FontId::new(22.0, FontFamily::Proportional), *color);
-                    ui.painter().text(egui::pos2(bg_rect.left() + 12.0, bg_rect.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, self.tr(key), FontId::new(10.0, FontFamily::Proportional), c.text_secondary);
-                    if let Some(pct) = bar {
-                        let bar_rect = egui::Rect::from_min_size(egui::pos2(bg_rect.left() + 12.0, bg_rect.top() + 36.0), Vec2::new(bg_rect.width() - 24.0, 4.0));
-                        ui.painter().rect_filled(bar_rect, CornerRadius::same(2), c.surface3);
-                        if *pct > 0.0 {
-                            let fill = egui::Rect::from_min_size(bar_rect.min, Vec2::new(bar_rect.width() * *pct, bar_rect.height()));
-                            ui.painter().rect_filled(fill, CornerRadius::same(2), *color);
-                        }
-                    }
-                    ui.add_space(12.0);
-                }
+            ui.columns(4, |cols| {
+                let cache_pct = if total_tokens > 0 {
+                    total_cache as f64 / total_tokens as f64 * 100.0
+                } else {
+                    0.0
+                };
+                metric_card(
+                    &mut cols[0],
+                    self.tr("total_tokens"),
+                    &format_tokens_full(total_tokens),
+                    clr,
+                    "\u{1F4A0}",
+                    None,
+                    c,
+                );
+                metric_card(
+                    &mut cols[1],
+                    self.tr("cache_hit_rate"),
+                    &format!("{:.1}%", cache_pct),
+                    c.green,
+                    "\u{25CC}",
+                    Some(cache_pct as f32 / 100.0),
+                    c,
+                );
+                metric_card(
+                    &mut cols[2],
+                    self.tr("total_requests"),
+                    &total_req.to_string(),
+                    c.cyan,
+                    "\u{1F4AC}",
+                    None,
+                    c,
+                );
+                metric_card(
+                    &mut cols[3],
+                    self.tr("model"),
+                    &models.len().to_string(),
+                    c.yellow,
+                    "\u{1F916}",
+                    None,
+                    c,
+                );
             });
         });
         ui.add_space(16.0);
 
         // Model breakdown
         let tool_models = aggregate_by_model(records);
-        Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 16), ..Default::default() }.show(ui, |ui| {
-            ui.label(egui::RichText::new(format!("{}  {}", "\u{1F916}", self.tr("model_breakdown")))
-                .font(FontId::new(16.0, FontFamily::Proportional)).color(c.text_primary));
+        Frame {
+            fill: c.surface2,
+            corner_radius: CornerRadius::same(12),
+            inner_margin: Margin::symmetric(20, 16),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{}  {}", "\u{1F916}", self.tr("model_breakdown")))
+                    .font(FontId::new(16.0, FontFamily::Proportional))
+                    .color(c.text_primary),
+            );
             ui.add_space(8.0);
 
-            let headers = [self.tr("model"), self.tr("requests"), self.tr("tokens"),
-                self.tr("input"), self.tr("output"), self.tr("cache"), self.tr("cache_pct")];
+            let headers = [
+                self.tr("model"),
+                self.tr("requests"),
+                self.tr("tokens"),
+                self.tr("input"),
+                self.tr("output"),
+                self.tr("cache"),
+                self.tr("cache_pct"),
+            ];
 
             egui::ScrollArea::horizontal().show(ui, |ui| {
-                egui::Grid::new("tool_model_grid").striped(true).show(ui, |ui| {
-                    for h in &headers {
-                        ui.label(egui::RichText::new(*h).font(FontId::new(12.0, FontFamily::Proportional)).color(clr).strong());
-                    }
-                    ui.end_row();
-
-                    for mb in &tool_models {
-                        let cache_pct = if mb.total_tokens > 0 { mb.cache_read as f64 / mb.total_tokens as f64 * 100.0 } else { 0.0 };
-                        let cache_color = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
-
-                        ui.label(egui::RichText::new(&mb.model_name).color(c.text_primary));
-                        ui.label(egui::RichText::new(&mb.request_count.to_string()).color(c.text_secondary));
-                        ui.label(egui::RichText::new(&format_tokens_full(mb.total_tokens)).color(c.text_primary).strong());
-                        ui.label(egui::RichText::new(&format_tokens_full(mb.prompt_tokens)).color(c.text_secondary));
-                        ui.label(egui::RichText::new(&format_tokens_full(mb.completion_tokens)).color(c.text_secondary));
-                        ui.label(egui::RichText::new(&format_tokens_full(mb.cache_read)).color(cache_color));
-                        ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).color(cache_color));
+                egui::Grid::new("tool_model_grid")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for h in &headers {
+                            ui.label(
+                                egui::RichText::new(*h)
+                                    .font(FontId::new(12.0, FontFamily::Proportional))
+                                    .color(clr)
+                                    .strong(),
+                            );
+                        }
                         ui.end_row();
-                    }
-                });
+
+                        for mb in &tool_models {
+                            let cache_pct = if mb.total_tokens > 0 {
+                                mb.cache_read as f64 / mb.total_tokens as f64 * 100.0
+                            } else {
+                                0.0
+                            };
+                            let cache_color = if cache_pct > 50.0 {
+                                c.green
+                            } else if cache_pct > 20.0 {
+                                c.yellow
+                            } else {
+                                c.orange
+                            };
+
+                            ui.label(egui::RichText::new(&mb.model_name).color(c.text_primary));
+                            ui.label(
+                                egui::RichText::new(&mb.request_count.to_string())
+                                    .color(c.text_secondary),
+                            );
+                            ui.label(
+                                egui::RichText::new(&format_tokens_full(mb.total_tokens))
+                                    .color(c.text_primary)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(&format_tokens_full(mb.prompt_tokens))
+                                    .color(c.text_secondary),
+                            );
+                            ui.label(
+                                egui::RichText::new(&format_tokens_full(mb.completion_tokens))
+                                    .color(c.text_secondary),
+                            );
+                            ui.label(
+                                egui::RichText::new(&format_tokens_full(mb.cache_read))
+                                    .color(cache_color),
+                            );
+                            ui.label(
+                                egui::RichText::new(&format!("{:.0}%", cache_pct))
+                                    .color(cache_color),
+                            );
+                            ui.end_row();
+                        }
+                    });
             });
         });
 
@@ -1442,49 +2405,230 @@ impl AiUsageApp {
         // Session detail — fill remaining space
         let used_y = ui.cursor().min.y - top_y;
         let remaining_h = (clip_h - used_y - 40.0).max(200.0);
-        Frame { fill: c.surface2, corner_radius: CornerRadius::same(12), inner_margin: Margin::symmetric(20, 16), ..Default::default() }.show(ui, |ui| {
+        Frame {
+            fill: c.surface2,
+            corner_radius: CornerRadius::same(12),
+            inner_margin: Margin::symmetric(20, 16),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
             ui.set_min_height(remaining_h);
-            ui.label(egui::RichText::new(format!("{}  {} ({} {})", "\u{1F4CB}", self.tr("session_detail"), records.len(), self.tr("sessions")))
-                .font(FontId::new(16.0, FontFamily::Proportional)).color(c.text_primary));
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}  {} ({} {})",
+                    "\u{1F4CB}",
+                    self.tr("session_detail"),
+                    records.len(),
+                    self.tr("sessions")
+                ))
+                .font(FontId::new(16.0, FontFamily::Proportional))
+                .color(c.text_primary),
+            );
             ui.add_space(8.0);
 
-            egui::Grid::new("tool_session_grid").striped(true).show(ui, |ui| {
-                let sheaders = [self.tr("session_id"), self.tr("time"), self.tr("model"), self.tr("tokens"), self.tr("cache"), self.tr("cache_pct")];
-                for h in &sheaders {
-                    ui.label(egui::RichText::new(*h).font(FontId::new(12.0, FontFamily::Proportional)).color(clr).strong());
-                }
-                ui.end_row();
-
-                for rec in records.iter().rev() {
-                    let cache_pct = if rec.total_tokens > 0 { rec.cache_read_tokens as f64 / rec.total_tokens as f64 * 100.0 } else { 0.0 };
-                    let ccol = if cache_pct > 50.0 { c.green } else if cache_pct > 20.0 { c.yellow } else { c.orange };
-                    let sid = if rec.session_id.is_empty() { "-".to_string() } else { rec.session_id.clone() };
-
-                    ui.label(egui::RichText::new(&sid).font(FontId::new(11.0, FontFamily::Monospace)).color(c.text_secondary));
-                    ui.label(egui::RichText::new(format!("{} {}", rec.date, rec.hour)).font(FontId::new(12.0, FontFamily::Monospace)).color(c.text_secondary));
-                    ui.label(egui::RichText::new(&rec.model_name).font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_primary));
-                    ui.label(egui::RichText::new(&format_tokens_full(rec.total_tokens)).font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_primary).strong());
-                    ui.label(egui::RichText::new(&format_tokens_full(rec.cache_read_tokens)).font(FontId::new(12.0, FontFamily::Proportional)).color(ccol));
-                    ui.label(egui::RichText::new(&format!("{:.0}%", cache_pct)).font(FontId::new(12.0, FontFamily::Proportional)).color(ccol));
+            egui::Grid::new("tool_session_grid")
+                .striped(true)
+                .show(ui, |ui| {
+                    let sheaders = [
+                        self.tr("session_id"),
+                        self.tr("time"),
+                        self.tr("model"),
+                        self.tr("tokens"),
+                        self.tr("cache"),
+                        self.tr("cache_pct"),
+                    ];
+                    for h in &sheaders {
+                        ui.label(
+                            egui::RichText::new(*h)
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(clr)
+                                .strong(),
+                        );
+                    }
                     ui.end_row();
-                }
-            });
+
+                    for rec in records.iter().rev() {
+                        let cache_pct = if rec.total_tokens > 0 {
+                            rec.cache_read_tokens as f64 / rec.total_tokens as f64 * 100.0
+                        } else {
+                            0.0
+                        };
+                        let ccol = if cache_pct > 50.0 {
+                            c.green
+                        } else if cache_pct > 20.0 {
+                            c.yellow
+                        } else {
+                            c.orange
+                        };
+                        let sid = if rec.session_id.is_empty() {
+                            "-".to_string()
+                        } else {
+                            rec.session_id.clone()
+                        };
+
+                        ui.label(
+                            egui::RichText::new(&sid)
+                                .font(FontId::new(11.0, FontFamily::Monospace))
+                                .color(c.text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{} {}", rec.date, rec.hour))
+                                .font(FontId::new(12.0, FontFamily::Monospace))
+                                .color(c.text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(&rec.model_name)
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(c.text_primary),
+                        );
+                        ui.label(
+                            egui::RichText::new(&format_tokens_full(rec.total_tokens))
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(c.text_primary)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(&format_tokens_full(rec.cache_read_tokens))
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(ccol),
+                        );
+                        ui.label(
+                            egui::RichText::new(&format!("{:.0}%", cache_pct))
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(ccol),
+                        );
+                        ui.end_row();
+                    }
+                });
         });
     }
 }
 
 // ─── Helper Functions ────────────────────────────────────────────
 
-fn tab_button(ui: &mut egui::Ui, label: &str, selected: bool, accent: Color32, c: &ThemeColors) -> bool {
+fn tab_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    accent: Color32,
+    c: &ThemeColors,
+) -> bool {
     ui.add(
-        egui::Button::new(egui::RichText::new(label).color(if selected { accent } else { c.text_secondary })
-            .font(FontId::new(13.0, FontFamily::Proportional)))
-            .fill(if selected { accent.gamma_multiply(0.3) } else { c.surface3 })
-            .corner_radius(CornerRadius::same(8)).frame(true)
-    ).clicked()
+        egui::Button::new(
+            egui::RichText::new(label)
+                .color(if selected { accent } else { c.text_secondary })
+                .font(FontId::new(13.0, FontFamily::Proportional)),
+        )
+        .fill(if selected {
+            accent.gamma_multiply(0.3)
+        } else {
+            c.surface3
+        })
+        .corner_radius(CornerRadius::same(8))
+        .frame(true),
+    )
+    .clicked()
 }
 
+fn paint_progress_ring(
+    ui: &egui::Ui,
+    center: egui::Pos2,
+    radius: f32,
+    progress: f32,
+    color: Color32,
+    bg: Color32,
+) {
+    let painter = ui.painter();
+    painter.circle_stroke(center, radius, egui::Stroke::new(3.0, bg));
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return;
+    }
 
+    let segments = (48.0 * progress).ceil().max(2.0) as usize;
+    let start = -std::f32::consts::FRAC_PI_2;
+    let sweep = std::f32::consts::TAU * progress;
+    let points: Vec<_> = (0..=segments)
+        .map(|i| {
+            let t = start + sweep * (i as f32 / segments as f32);
+            center + Vec2::new(t.cos() * radius, t.sin() * radius)
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, egui::Stroke::new(3.0, color)));
+}
+
+fn metric_card(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    color: Color32,
+    icon: &str,
+    progress: Option<f32>,
+    c: &ThemeColors,
+) {
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    let rect = rect.shrink(2.0);
+    let hover = if resp.hovered() { 1.0 } else { 0.0 };
+    let fill = c.surface3.linear_multiply(0.86 + hover * 0.12);
+    let stroke = egui::Stroke::new(1.0 + hover, color.gamma_multiply(0.52 + hover * 0.22));
+
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(10),
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            rect.min + Vec2::new(0.0, 0.0),
+            Vec2::new(4.0, rect.height()),
+        ),
+        CornerRadius::same(3),
+        color,
+    );
+
+    let glow = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 28.0));
+    ui.painter().rect_filled(
+        glow,
+        CornerRadius::same(10),
+        color.gamma_multiply(0.06 + hover * 0.05),
+    );
+
+    ui.painter().text(
+        rect.left_top() + Vec2::new(16.0, 14.0),
+        Align2::LEFT_TOP,
+        icon,
+        FontId::new(20.0, FontFamily::Proportional),
+        color,
+    );
+    ui.painter().text(
+        rect.left_bottom() + Vec2::new(16.0, -16.0),
+        Align2::LEFT_BOTTOM,
+        label,
+        FontId::new(11.0, FontFamily::Proportional),
+        c.text_secondary,
+    );
+    ui.painter().text(
+        rect.right_bottom() + Vec2::new(-16.0, -18.0),
+        Align2::RIGHT_BOTTOM,
+        value,
+        FontId::new(28.0, FontFamily::Proportional),
+        color,
+    );
+
+    if let Some(pct) = progress {
+        let center = rect.right_top() + Vec2::new(-30.0, 31.0);
+        paint_progress_ring(ui, center, 18.0, pct, color, c.surface);
+    } else {
+        let dot = rect.right_top() + Vec2::new(-22.0, 22.0);
+        ui.painter()
+            .circle_filled(dot, 4.0, color.gamma_multiply(0.9));
+        ui.painter()
+            .circle_stroke(dot, 8.0, egui::Stroke::new(1.0, color.gamma_multiply(0.28)));
+    }
+}
 
 impl AiUsageApp {
     fn time_range_selector(&mut self, ui: &mut egui::Ui, c: &ThemeColors) {
@@ -1499,17 +2643,39 @@ impl AiUsageApp {
         ui.horizontal(|ui| {
             for (rt, key) in types {
                 let sel = current_type == *rt;
-                let bg = if sel { c.accent.gamma_multiply(0.3) } else { c.surface3 };
-                let color = if sel { c.accent_light } else { c.text_secondary };
+                let bg = if sel {
+                    c.accent.gamma_multiply(0.3)
+                } else {
+                    c.surface3
+                };
+                let color = if sel {
+                    c.accent_light
+                } else {
+                    c.text_secondary
+                };
 
-                if ui.add(egui::Button::new(egui::RichText::new(self.tr(key)).color(color)
-                    .font(FontId::new(12.0, FontFamily::Proportional)))
-                    .fill(bg).corner_radius(CornerRadius::same(6)).frame(true)).clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(self.tr(key))
+                                .color(color)
+                                .font(FontId::new(12.0, FontFamily::Proportional)),
+                        )
+                        .fill(bg)
+                        .corner_radius(CornerRadius::same(6))
+                        .frame(true),
+                    )
+                    .clicked()
+                {
                     let new_range = match rt {
                         DateRangeType::Today => DateRange::today(),
                         DateRangeType::Week => DateRange::this_week(),
                         DateRangeType::Month => DateRange::this_month(),
-                        DateRangeType::Custom => DateRange { range_type: DateRangeType::Custom, start: self.custom_start, end: self.custom_end },
+                        DateRangeType::Custom => DateRange {
+                            range_type: DateRangeType::Custom,
+                            start: self.custom_start,
+                            end: self.custom_end,
+                        },
                     };
                     self.date_range = new_range.clone();
                     self.start_load(new_range);
@@ -1519,9 +2685,18 @@ impl AiUsageApp {
             if current_type == DateRangeType::Custom {
                 ui.add_space(8.0);
 
-                if ui.add(egui::Button::new(egui::RichText::new(self.custom_start.format("%Y-%m-%d").to_string())
-                    .font(FontId::new(12.0, FontFamily::Monospace)).color(c.text_primary))
-                    .fill(c.surface3).corner_radius(CornerRadius::same(6))).clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(self.custom_start.format("%Y-%m-%d").to_string())
+                                .font(FontId::new(12.0, FontFamily::Monospace))
+                                .color(c.text_primary),
+                        )
+                        .fill(c.surface3)
+                        .corner_radius(CornerRadius::same(6)),
+                    )
+                    .clicked()
+                {
                     self.date_picker.target = "start".into();
                     self.date_picker.year = self.custom_start.year();
                     self.date_picker.month = self.custom_start.month();
@@ -1530,9 +2705,18 @@ impl AiUsageApp {
 
                 ui.label(egui::RichText::new("->").color(c.text_secondary));
 
-                if ui.add(egui::Button::new(egui::RichText::new(self.custom_end.format("%Y-%m-%d").to_string())
-                    .font(FontId::new(12.0, FontFamily::Monospace)).color(c.text_primary))
-                    .fill(c.surface3).corner_radius(CornerRadius::same(6))).clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(self.custom_end.format("%Y-%m-%d").to_string())
+                                .font(FontId::new(12.0, FontFamily::Monospace))
+                                .color(c.text_primary),
+                        )
+                        .fill(c.surface3)
+                        .corner_radius(CornerRadius::same(6)),
+                    )
+                    .clicked()
+                {
                     self.date_picker.target = "end".into();
                     self.date_picker.year = self.custom_end.year();
                     self.date_picker.month = self.custom_end.month();
@@ -1541,11 +2725,23 @@ impl AiUsageApp {
 
                 ui.add_space(4.0);
 
-                if ui.add(egui::Button::new(egui::RichText::new(self.tr("apply"))
-                    .font(FontId::new(12.0, FontFamily::Proportional)).color(c.text_primary))
-                    .fill(c.accent.gamma_multiply(0.3))
-                    .corner_radius(CornerRadius::same(6))).clicked() {
-                    let new_range = DateRange { range_type: DateRangeType::Custom, start: self.custom_start, end: self.custom_end };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(self.tr("apply"))
+                                .font(FontId::new(12.0, FontFamily::Proportional))
+                                .color(c.text_primary),
+                        )
+                        .fill(c.accent.gamma_multiply(0.3))
+                        .corner_radius(CornerRadius::same(6)),
+                    )
+                    .clicked()
+                {
+                    let new_range = DateRange {
+                        range_type: DateRangeType::Custom,
+                        start: self.custom_start,
+                        end: self.custom_end,
+                    };
                     self.date_range = new_range.clone();
                     self.start_load(new_range);
                 }
@@ -1560,13 +2756,22 @@ fn setup_fonts(cc: &eframe::CreationContext) {
     let font_candidates = [
         ("pingfang", "/System/Library/Fonts/PingFang.ttc"),
         ("stheitisc", "/System/Library/Fonts/STHeiti Light.ttc"),
-        ("notocjk", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        ("notocjk2", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        (
+            "notocjk",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ),
+        (
+            "notocjk2",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        ),
         ("arialuni", "/Library/Fonts/Arial Unicode.ttf"),
         ("msyh", "C:\\Windows\\Fonts\\msyh.ttc"),
         ("simsun", "C:\\Windows\\Fonts\\simsun.ttc"),
         ("emojifont", "/System/Library/Fonts/Apple Color Emoji.ttc"),
-        ("notoemoji", "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
+        (
+            "notoemoji",
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        ),
         ("segoeuiemoji", "C:\\Windows\\Fonts\\seguiemj.ttf"),
     ];
 
@@ -1576,7 +2781,10 @@ fn setup_fonts(cc: &eframe::CreationContext) {
                 name.to_string(),
                 std::sync::Arc::new(egui::FontData::from_owned(data.into())),
             );
-            fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap()
+            fonts
+                .families
+                .get_mut(&egui::FontFamily::Proportional)
+                .unwrap()
                 .push(name.to_string());
         }
     }
@@ -1592,13 +2800,18 @@ fn load_icon_from_icns() -> Option<egui::IconData> {
     let mut best: Option<(Vec<u8>, u32, u32)> = None;
     let mut i = 8usize;
     while i + 8 <= data.len() {
-        let entry_type = &data[i..i+4];
-        let entry_size = u32::from_be_bytes([data[i+4], data[i+5], data[i+6], data[i+7]]) as usize;
+        let entry_type = &data[i..i + 4];
+        let entry_size =
+            u32::from_be_bytes([data[i + 4], data[i + 5], data[i + 6], data[i + 7]]) as usize;
         if entry_size < 8 || i + entry_size > data.len() {
             break;
         }
-        let payload = &data[i+8..i+entry_size];
-        if entry_type == b"ic10" || entry_type == b"ic09" || entry_type == b"ic08" || entry_type == b"ic07" {
+        let payload = &data[i + 8..i + entry_size];
+        if entry_type == b"ic10"
+            || entry_type == b"ic09"
+            || entry_type == b"ic08"
+            || entry_type == b"ic07"
+        {
             if let Ok(img) = image::load_from_memory(payload) {
                 let (w, h) = img.dimensions();
                 if best.as_ref().map(|b| w > b.1).unwrap_or(true) {
@@ -1608,13 +2821,19 @@ fn load_icon_from_icns() -> Option<egui::IconData> {
         }
         i += entry_size;
     }
-    best.map(|(rgba, w, h)| egui::IconData { rgba, width: w, height: h })
+    best.map(|(rgba, w, h)| egui::IconData {
+        rgba,
+        width: w,
+        height: h,
+    })
 }
 
 fn main() -> Result<(), eframe::Error> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
-            .add_directive("ai_usage_statistics=info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("ai_usage_statistics=info".parse().unwrap()),
+        )
         .init();
 
     let config = load_config();
