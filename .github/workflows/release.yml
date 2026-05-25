@@ -81,7 +81,7 @@ jobs:
           hdiutil create -volname "AI Usage Statistics" \
             -srcfolder "$DMG_DIR" \
             -ov -format UDZO \
-            "AI-Usage-Statistics-${{ matrix.platform.name }}.dmg"
+            "AI-Usage-Statistics-${GITHUB_REF_NAME}.dmg"
 
       - name: Package as .deb (Linux only)
         if: runner.os == 'Linux'

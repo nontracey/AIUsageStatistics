@@ -35,6 +35,13 @@ fn platform_asset_pattern() -> &'static str {
     }
 }
 
+fn platform_archive_suffix() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => ".zip",
+        _ => ".tar.gz",
+    }
+}
+
 pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, String> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/releases/latest",
@@ -75,10 +82,12 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         return Err("不支持的平台".into());
     }
 
+    let archive_suffix = platform_archive_suffix();
     let asset = release
         .assets
         .iter()
-        .find(|a| a.name.contains(pattern))
+        .find(|a| a.name.contains(pattern) && a.name.ends_with(archive_suffix))
+        .or_else(|| release.assets.iter().find(|a| a.name.contains(pattern)))
         .ok_or_else(|| format!("未找到 {} 的构建产物", pattern))?;
 
     Ok(Some(UpdateInfo {
