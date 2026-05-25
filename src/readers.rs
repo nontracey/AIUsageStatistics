@@ -1,5 +1,8 @@
 use crate::models::*;
 use chrono::{NaiveDate, Timelike};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -17,44 +20,88 @@ fn local_share_dir() -> PathBuf {
     home_dir().join(".local/share")
 }
 
+fn override_or_default(
+    overrides: &HashMap<String, String>,
+    name: &str,
+    default: PathBuf,
+) -> PathBuf {
+    overrides
+        .get(name)
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default)
+}
+
 fn is_db_valid(path: &std::path::Path) -> bool {
     path.exists() && path.metadata().map(|m| m.len() > 100).unwrap_or(false)
 }
 
 // ─── opencode ─────────────────────────────────────────────────
 
-pub struct OpencodeReader;
+pub struct OpencodeReader {
+    db_path: PathBuf,
+}
+
+impl OpencodeReader {
+    fn new(overrides: &HashMap<String, String>) -> Self {
+        Self {
+            db_path: override_or_default(
+                overrides,
+                "opencode",
+                local_share_dir().join("opencode/opencode.db"),
+            ),
+        }
+    }
+}
 
 impl UsageReader for OpencodeReader {
-    fn name(&self) -> &str { "opencode" }
+    fn name(&self) -> &str {
+        "opencode"
+    }
     fn is_installed(&self) -> bool {
-        which_installed("opencode") || local_share_dir().join("opencode/opencode.db").exists()
+        which_installed("opencode") || self.db_path.exists()
     }
     fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord> {
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.1, message: "Opening database...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.1,
+            message: "Opening database...".into(),
+            done: false,
+            error: None,
         });
 
-        let db_path = local_share_dir().join("opencode/opencode.db");
-        if !is_db_valid(&db_path) {
+        let db_path = &self.db_path;
+        if !is_db_valid(db_path) {
             let _ = progress.send(ProgressUpdate {
-                cli_name: self.name().to_string(), percent: 1.0, message: "Database not found".into(), done: true, error: Some("Database not found".into()),
+                cli_name: self.name().to_string(),
+                percent: 1.0,
+                message: "Database not found".into(),
+                done: true,
+                error: Some("Database not found".into()),
             });
             return vec![];
         }
 
-        let conn = match rusqlite::Connection::open(&db_path) {
+        let conn = match rusqlite::Connection::open(db_path) {
             Ok(c) => c,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
         };
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.3, message: "Querying sessions...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.3,
+            message: "Querying sessions...".into(),
+            done: false,
+            error: None,
         });
 
         let start_str = range.start.format("%Y-%m-%d").to_string();
@@ -66,12 +113,16 @@ impl UsageReader for OpencodeReader {
              FROM session
              WHERE date(time_created / 1000, 'unixepoch') >= ?1
                AND date(time_created / 1000, 'unixepoch') <= ?2
-             ORDER BY time_created"
+             ORDER BY time_created",
         ) {
             Ok(s) => s,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Query error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Query error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
@@ -91,7 +142,10 @@ impl UsageReader for OpencodeReader {
 
             let model_name = serde_json::from_str::<serde_json::Value>(&model_json)
                 .ok()
-                .and_then(|v| v.get("id").and_then(|id| id.as_str().map(|s| s.to_string())))
+                .and_then(|v| {
+                    v.get("id")
+                        .and_then(|id| id.as_str().map(|s| s.to_string()))
+                })
                 .unwrap_or_else(|| model_json.clone());
 
             let dt = chrono::DateTime::from_timestamp(ts_ms / 1000, 0)
@@ -125,9 +179,15 @@ impl UsageReader for OpencodeReader {
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 1.0,
-            message: format!("Done: {} records, {} tokens", records.len(), format_tokens_full(records.iter().map(|r| r.total_tokens).sum())),
-            done: true, error: None,
+            cli_name: self.name().to_string(),
+            percent: 1.0,
+            message: format!(
+                "Done: {} records, {} tokens",
+                records.len(),
+                format_tokens_full(records.iter().map(|r| r.total_tokens).sum())
+            ),
+            done: true,
+            error: None,
         });
         records
     }
@@ -135,42 +195,78 @@ impl UsageReader for OpencodeReader {
 
 // ─── hermes ───────────────────────────────────────────────────
 
-pub struct HermesReader;
+pub struct HermesReader {
+    db_path: PathBuf,
+}
+
+impl HermesReader {
+    fn new(overrides: &HashMap<String, String>) -> Self {
+        Self {
+            db_path: override_or_default(overrides, "hermes", home_dir().join(".hermes/state.db")),
+        }
+    }
+}
 
 impl UsageReader for HermesReader {
-    fn name(&self) -> &str { "hermes" }
+    fn name(&self) -> &str {
+        "hermes"
+    }
     fn is_installed(&self) -> bool {
-        which_installed("hermes") || home_dir().join(".hermes/state.db").exists()
+        which_installed("hermes") || self.db_path.exists()
     }
     fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord> {
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.1, message: "Opening database...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.1,
+            message: "Opening database...".into(),
+            done: false,
+            error: None,
         });
 
-        let db_path = home_dir().join(".hermes/state.db");
+        let db_path = &self.db_path;
         if !db_path.exists() {
             let _ = progress.send(ProgressUpdate {
-                cli_name: self.name().to_string(), percent: 1.0, message: "Database not found".into(), done: true, error: Some("Database not found".into()),
+                cli_name: self.name().to_string(),
+                percent: 1.0,
+                message: "Database not found".into(),
+                done: true,
+                error: Some("Database not found".into()),
             });
             return vec![];
         }
 
-        let conn = match rusqlite::Connection::open(&db_path) {
+        let conn = match rusqlite::Connection::open(db_path) {
             Ok(c) => c,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
         };
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.3, message: "Querying sessions...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.3,
+            message: "Querying sessions...".into(),
+            done: false,
+            error: None,
         });
 
-        let start_ts = range.start.and_hms_opt(0, 0, 0).map(|d| d.and_utc().timestamp() as f64).unwrap_or(0.0);
-        let end_ts = range.end.and_hms_opt(23, 59, 59).map(|d| d.and_utc().timestamp() as f64).unwrap_or(0.0);
+        let start_ts = range
+            .start
+            .and_hms_opt(0, 0, 0)
+            .map(|d| d.and_utc().timestamp() as f64)
+            .unwrap_or(0.0);
+        let end_ts = range
+            .end
+            .and_hms_opt(23, 59, 59)
+            .map(|d| d.and_utc().timestamp() as f64)
+            .unwrap_or(0.0);
 
         let mut stmt = match conn.prepare(
             "SELECT model, input_tokens, output_tokens, cache_read_tokens,
@@ -178,12 +274,16 @@ impl UsageReader for HermesReader {
                     estimated_cost_usd, actual_cost_usd, source, id
              FROM sessions
              WHERE started_at >= ?1 AND started_at <= ?2
-             ORDER BY started_at"
+             ORDER BY started_at",
         ) {
             Ok(s) => s,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Query error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Query error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
@@ -239,9 +339,15 @@ impl UsageReader for HermesReader {
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 1.0,
-            message: format!("Done: {} records, {} tokens", records.len(), format_tokens_full(records.iter().map(|r| r.total_tokens).sum())),
-            done: true, error: None,
+            cli_name: self.name().to_string(),
+            percent: 1.0,
+            message: format!(
+                "Done: {} records, {} tokens",
+                records.len(),
+                format_tokens_full(records.iter().map(|r| r.total_tokens).sum())
+            ),
+            done: true,
+            error: None,
         });
         records
     }
@@ -249,54 +355,98 @@ impl UsageReader for HermesReader {
 
 // ─── codex ────────────────────────────────────────────────────
 
-pub struct CodexReader;
+pub struct CodexReader {
+    db_path: PathBuf,
+}
+
+impl CodexReader {
+    fn new(overrides: &HashMap<String, String>) -> Self {
+        Self {
+            db_path: override_or_default(
+                overrides,
+                "codex",
+                home_dir().join(".codex/state_5.sqlite"),
+            ),
+        }
+    }
+}
 
 impl UsageReader for CodexReader {
-    fn name(&self) -> &str { "codex" }
+    fn name(&self) -> &str {
+        "codex"
+    }
     fn is_installed(&self) -> bool {
-        which_installed("codex") || home_dir().join(".codex/state_5.sqlite").exists()
+        which_installed("codex") || self.db_path.exists()
     }
     fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord> {
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.05, message: "Opening database...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.05,
+            message: "Opening database...".into(),
+            done: false,
+            error: None,
         });
 
-        let db_path = home_dir().join(".codex/state_5.sqlite");
+        let db_path = &self.db_path;
         if !db_path.exists() {
             let _ = progress.send(ProgressUpdate {
-                cli_name: self.name().to_string(), percent: 1.0, message: "Database not found".into(), done: true, error: Some("Database not found".into()),
+                cli_name: self.name().to_string(),
+                percent: 1.0,
+                message: "Database not found".into(),
+                done: true,
+                error: Some("Database not found".into()),
             });
             return vec![];
         }
 
-        let conn = match rusqlite::Connection::open(&db_path) {
+        let conn = match rusqlite::Connection::open(db_path) {
             Ok(c) => c,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
         };
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.2, message: "Querying threads...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.2,
+            message: "Querying threads...".into(),
+            done: false,
+            error: None,
         });
 
-        let start_ts = range.start.and_hms_opt(0, 0, 0).map(|d| d.and_utc().timestamp()).unwrap_or(0);
-        let end_ts = range.end.and_hms_opt(23, 59, 59).map(|d| d.and_utc().timestamp()).unwrap_or(0);
+        let start_ts = range
+            .start
+            .and_hms_opt(0, 0, 0)
+            .map(|d| d.and_utc().timestamp())
+            .unwrap_or(0);
+        let end_ts = range
+            .end
+            .and_hms_opt(23, 59, 59)
+            .map(|d| d.and_utc().timestamp())
+            .unwrap_or(0);
 
         // Main query: threads + optional JSONL cache data
         let mut stmt = match conn.prepare(
             "SELECT model, tokens_used, source, created_at, rollout_path
              FROM threads
              WHERE created_at >= ?1 AND created_at <= ?2
-             ORDER BY created_at"
+             ORDER BY created_at",
         ) {
             Ok(s) => s,
             Err(e) => {
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: 1.0, message: format!("Query error: {e}"), done: true, error: Some(e.to_string()),
+                    cli_name: self.name().to_string(),
+                    percent: 1.0,
+                    message: format!("Query error: {e}"),
+                    done: true,
+                    error: Some(e.to_string()),
                 });
                 return vec![];
             }
@@ -310,28 +460,35 @@ impl UsageReader for CodexReader {
             rollout_path: Option<String>,
         }
 
-        let rows: Vec<ThreadRow> = stmt.query_map(rusqlite::params![start_ts, end_ts], |row| {
-            Ok(ThreadRow {
-                model: row.get(0)?,
-                tokens_used: row.get(1)?,
-                source: row.get(2)?,
-                created_at: row.get(3)?,
-                rollout_path: row.get(4)?,
+        let rows: Vec<ThreadRow> = stmt
+            .query_map(rusqlite::params![start_ts, end_ts], |row| {
+                Ok(ThreadRow {
+                    model: row.get(0)?,
+                    tokens_used: row.get(1)?,
+                    source: row.get(2)?,
+                    created_at: row.get(3)?,
+                    rollout_path: row.get(4)?,
+                })
             })
-        })
-        .map(|r| r.flatten().collect())
-        .unwrap_or_default();
+            .map(|r| r.flatten().collect())
+            .unwrap_or_default();
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.4,
-            message: format!("Found {} threads, parsing cache data...", rows.len()), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.4,
+            message: format!("Found {} threads, parsing cache data...", rows.len()),
+            done: false,
+            error: None,
         });
 
         // Try to read cache data from JSONL files
         let total = rows.len();
         let mut records: Vec<UsageRecord> = Vec::new();
 
-        let codex_dir = home_dir().join(".codex");
+        let codex_dir = db_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join(".codex"));
         for (i, thread) in rows.into_iter().enumerate() {
             let dt = chrono::DateTime::from_timestamp(thread.created_at, 0)
                 .map(|d| d.naive_utc())
@@ -345,32 +502,69 @@ impl UsageReader for CodexReader {
             let mut cache_read: u64 = 0;
             let cache_write: u64 = 0;
 
-            // Try to find cache data from JSONL rollout file
+            // Try to find cache data from JSONL rollout file.
             if let Some(ref path) = thread.rollout_path {
                 let jsonl_path = codex_dir.join(path);
                 if jsonl_path.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&jsonl_path) {
-                        // Scan first 20 lines for usage metadata with cache info
-                        for line in content.lines().take(20) {
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Ok(file) = File::open(&jsonl_path) {
+                        let mut cumulative_cached = 0;
+                        for line in BufReader::new(file).lines().flatten() {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                                if val.get("type").and_then(|v| v.as_str()) == Some("event_msg") {
+                                    let info = val
+                                        .get("payload")
+                                        .and_then(|p| p.get("info"));
+                                    if let Some(usage) =
+                                        info.and_then(|i| i.get("total_token_usage"))
+                                    {
+                                        cumulative_cached = cumulative_cached.max(
+                                            usage
+                                                .get("cached_input_tokens")
+                                                .and_then(|c| c.as_u64())
+                                                .unwrap_or(0),
+                                        );
+                                    }
+                                    if let Some(usage) = info.and_then(|i| i.get("last_token_usage"))
+                                    {
+                                        cache_read += usage
+                                            .get("cached_input_tokens")
+                                            .and_then(|c| c.as_u64())
+                                            .unwrap_or(0);
+                                    }
+                                }
                                 if let Some(usage) = val.get("usage") {
                                     if let Some(details) = usage.get("input_token_details") {
-                                        cache_read += details.get("cached_tokens").and_then(|c| c.as_u64()).unwrap_or(0);
+                                        cache_read += details
+                                            .get("cached_tokens")
+                                            .and_then(|c| c.as_u64())
+                                            .unwrap_or(0);
                                     }
                                 }
                                 if let Some(meta) = val.get("usageMetadata") {
-                                    cache_read += meta.get("cachedContentTokenCount").and_then(|c| c.as_u64()).unwrap_or(0);
+                                    cache_read += meta
+                                        .get("cachedContentTokenCount")
+                                        .and_then(|c| c.as_u64())
+                                        .unwrap_or(0);
                                 }
                             }
+                        }
+                        if cumulative_cached > 0 {
+                            cache_read = cumulative_cached;
                         }
                     }
                 }
             }
 
             records.push(UsageRecord {
-                session_id: thread.rollout_path.as_deref().and_then(|p| {
-                    std::path::Path::new(p).file_stem().and_then(|s| s.to_str().map(|s| s.to_string()))
-                }).unwrap_or_default(),
+                session_id: thread
+                    .rollout_path
+                    .as_deref()
+                    .and_then(|p| {
+                        std::path::Path::new(p)
+                            .file_stem()
+                            .and_then(|s| s.to_str().map(|s| s.to_string()))
+                    })
+                    .unwrap_or_default(),
                 cli_name: "codex".to_string(),
                 source_type: src,
                 model_name: thread.model.unwrap_or_else(|| "unknown".to_string()),
@@ -390,16 +584,25 @@ impl UsageReader for CodexReader {
             if i % 5 == 0 {
                 let p = 0.4 + (i as f32 / total.max(1) as f32) * 0.6;
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: p,
-                    message: format!("Parsed {}/{} threads", i + 1, total), done: false, error: None,
+                    cli_name: self.name().to_string(),
+                    percent: p,
+                    message: format!("Parsed {}/{} threads", i + 1, total),
+                    done: false,
+                    error: None,
                 });
             }
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 1.0,
-            message: format!("Done: {} threads, {} tokens", records.len(), format_tokens_full(records.iter().map(|r| r.total_tokens).sum())),
-            done: true, error: None,
+            cli_name: self.name().to_string(),
+            percent: 1.0,
+            message: format!(
+                "Done: {} threads, {} tokens",
+                records.len(),
+                format_tokens_full(records.iter().map(|r| r.total_tokens).sum())
+            ),
+            done: true,
+            error: None,
         });
         records
     }
@@ -407,19 +610,35 @@ impl UsageReader for CodexReader {
 
 // ─── claude ────────────────────────────────────────────────────
 
-pub struct ClaudeReader;
+pub struct ClaudeReader {
+    data_dir: PathBuf,
+}
+
+impl ClaudeReader {
+    fn new(overrides: &HashMap<String, String>) -> Self {
+        Self {
+            data_dir: override_or_default(overrides, "claude", home_dir().join(".claude")),
+        }
+    }
+}
 
 impl UsageReader for ClaudeReader {
-    fn name(&self) -> &str { "claude" }
+    fn name(&self) -> &str {
+        "claude"
+    }
     fn is_installed(&self) -> bool {
-        which_installed("claude") || home_dir().join(".claude/stats-cache.json").exists()
+        which_installed("claude") || self.data_dir.join("stats-cache.json").exists()
     }
     fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord> {
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.1, message: "Scanning data...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.1,
+            message: "Scanning data...".into(),
+            done: false,
+            error: None,
         });
 
-        let claude_dir = home_dir().join(".claude");
+        let claude_dir = &self.data_dir;
         let mut records: Vec<UsageRecord> = Vec::new();
 
         // Method 1: Read stats-cache.json (fast, has model-level data with cache info)
@@ -427,13 +646,20 @@ impl UsageReader for ClaudeReader {
         let has_stats_cache = cache_path.exists();
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.2,
-            message: if has_stats_cache { "Reading stats-cache.json...".into() } else { "No stats-cache.json found".into() },
-            done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.2,
+            message: if has_stats_cache {
+                "Reading stats-cache.json...".into()
+            } else {
+                "No stats-cache.json found".into()
+            },
+            done: false,
+            error: None,
         });
 
         let mut daily_by_model: Vec<(NaiveDate, String, u64)> = Vec::new();
-        let mut per_model_totals: std::collections::HashMap<String, (u64, u64, u64, u64)> = std::collections::HashMap::new();
+        let mut per_model_totals: std::collections::HashMap<String, (u64, u64, u64, u64)> =
+            std::collections::HashMap::new();
 
         if has_stats_cache {
             if let Ok(content) = std::fs::read_to_string(&cache_path) {
@@ -441,10 +667,22 @@ impl UsageReader for ClaudeReader {
                     // Read modelUsage per-model aggregates (has cache info)
                     if let Some(mu) = json.get("modelUsage").and_then(|v| v.as_object()) {
                         for (model, data) in mu {
-                            let inp = data.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let out = data.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let cache_r = data.get("cacheReadInputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let cache_c = data.get("cacheCreationInputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let inp = data
+                                .get("inputTokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let out = data
+                                .get("outputTokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let cache_r = data
+                                .get("cacheReadInputTokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let cache_c = data
+                                .get("cacheCreationInputTokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
                             per_model_totals.insert(model.clone(), (inp, out, cache_r, cache_c));
                         }
                     }
@@ -455,7 +693,9 @@ impl UsageReader for ClaudeReader {
                             let date_str = entry.get("date").and_then(|v| v.as_str()).unwrap_or("");
                             if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                                 if range.contains(date) {
-                                    if let Some(tbm) = entry.get("tokensByModel").and_then(|v| v.as_object()) {
+                                    if let Some(tbm) =
+                                        entry.get("tokensByModel").and_then(|v| v.as_object())
+                                    {
                                         for (model, tokens) in tbm {
                                             let t = tokens.as_u64().unwrap_or(0);
                                             daily_by_model.push((date, model.clone(), t));
@@ -472,36 +712,62 @@ impl UsageReader for ClaudeReader {
         // Method 2: Read session-meta JSON files (per-session input/output)
         let meta_dir = claude_dir.join("usage-data/session-meta");
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.5, message: "Reading session-meta files...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.5,
+            message: "Reading session-meta files...".into(),
+            done: false,
+            error: None,
         });
 
         let mut session_entries: Vec<(NaiveDate, u8, u64, u64, String, String)> = Vec::new();
 
         if meta_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&meta_dir) {
-                let files: Vec<_> = entries.filter_map(|e| e.ok()).filter(|e| {
-                    e.path().extension().and_then(|s| s.to_str()) == Some("json")
-                }).collect();
+                let files: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+                    .collect();
 
                 let total_files = files.len();
                 for (i, entry) in files.iter().enumerate() {
                     let path = entry.path();
-                    let session_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    let session_id = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                            let start_time = json.get("start_time").and_then(|v| v.as_str()).unwrap_or("");
-                            let inp = json.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let out = json.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let start_time = json
+                                .get("start_time")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let inp = json
+                                .get("input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let out = json
+                                .get("output_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
 
                             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(start_time) {
                                 let date = dt.date_naive();
                                 if range.contains(date) {
                                     // Try to get model from session JSON (not always present)
-                                    let model = json.get("model")
+                                    let model = json
+                                        .get("model")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string())
                                         .unwrap_or_else(|| "unknown".to_string());
-                                    session_entries.push((date, dt.hour() as u8, inp, out, model, session_id));
+                                    session_entries.push((
+                                        date,
+                                        dt.hour() as u8,
+                                        inp,
+                                        out,
+                                        model,
+                                        session_id,
+                                    ));
                                 }
                             }
                         }
@@ -510,8 +776,11 @@ impl UsageReader for ClaudeReader {
                     if i % 10 == 0 {
                         let p = 0.5 + (i as f32 / total_files.max(1) as f32) * 0.5;
                         let _ = progress.send(ProgressUpdate {
-                            cli_name: self.name().to_string(), percent: p,
-                            message: format!("Reading session files {}/{}", i + 1, total_files), done: false, error: None,
+                            cli_name: self.name().to_string(),
+                            percent: p,
+                            message: format!("Reading session files {}/{}", i + 1, total_files),
+                            done: false,
+                            error: None,
                         });
                     }
                 }
@@ -524,7 +793,8 @@ impl UsageReader for ClaudeReader {
                 // Try to find model from per_model_totals
                 if !per_model_totals.is_empty() {
                     // Use the model with highest token count for approximate attribution
-                    per_model_totals.iter()
+                    per_model_totals
+                        .iter()
                         .max_by_key(|(_, (i, o, _, _))| *i + *o)
                         .map(|(name, _)| name.clone())
                         .unwrap_or_else(|| "unknown".to_string())
@@ -535,7 +805,10 @@ impl UsageReader for ClaudeReader {
                 model_name.clone()
             };
 
-            let (_, _, cache_r, cache_w) = per_model_totals.get(&model).copied().unwrap_or((0, 0, 0, 0));
+            let (_, _, cache_r, cache_w) = per_model_totals
+                .get(&model)
+                .copied()
+                .unwrap_or((0, 0, 0, 0));
 
             records.push(UsageRecord {
                 session_id,
@@ -557,8 +830,11 @@ impl UsageReader for ClaudeReader {
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 1.0,
-            message: format!("Done: {} records", records.len()), done: true, error: None,
+            cli_name: self.name().to_string(),
+            percent: 1.0,
+            message: format!("Done: {} records", records.len()),
+            done: true,
+            error: None,
         });
         records
     }
@@ -566,22 +842,42 @@ impl UsageReader for ClaudeReader {
 
 // ─── qwen ──────────────────────────────────────────────────────
 
-pub struct QwenReader;
+pub struct QwenReader {
+    data_dir: PathBuf,
+}
+
+impl QwenReader {
+    fn new(overrides: &HashMap<String, String>) -> Self {
+        Self {
+            data_dir: override_or_default(overrides, "qwen", home_dir().join(".qwen")),
+        }
+    }
+}
 
 impl UsageReader for QwenReader {
-    fn name(&self) -> &str { "qwen" }
+    fn name(&self) -> &str {
+        "qwen"
+    }
     fn is_installed(&self) -> bool {
-        which_installed("qwen") || home_dir().join(".qwen/settings.json").exists()
+        which_installed("qwen") || self.data_dir.join("settings.json").exists()
     }
     fn read(&self, range: &DateRange, progress: &mpsc::Sender<ProgressUpdate>) -> Vec<UsageRecord> {
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.1, message: "Scanning project chat files...".into(), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.1,
+            message: "Scanning project chat files...".into(),
+            done: false,
+            error: None,
         });
 
-        let qwen_dir = home_dir().join(".qwen/projects");
+        let qwen_dir = self.data_dir.join("projects");
         if !qwen_dir.exists() {
             let _ = progress.send(ProgressUpdate {
-                cli_name: self.name().to_string(), percent: 1.0, message: "No qwen data found".into(), done: true, error: None,
+                cli_name: self.name().to_string(),
+                percent: 1.0,
+                message: "No qwen data found".into(),
+                done: true,
+                error: None,
             });
             return vec![];
         }
@@ -607,50 +903,104 @@ impl UsageReader for QwenReader {
         let total_files = chat_files.len();
         if total_files == 0 {
             let _ = progress.send(ProgressUpdate {
-                cli_name: self.name().to_string(), percent: 1.0, message: "No chat files found".into(), done: true, error: None,
+                cli_name: self.name().to_string(),
+                percent: 1.0,
+                message: "No chat files found".into(),
+                done: true,
+                error: None,
             });
             return vec![];
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 0.15,
-            message: format!("Found {total_files} chat files, parsing..."), done: false, error: None,
+            cli_name: self.name().to_string(),
+            percent: 0.15,
+            message: format!("Found {total_files} chat files, parsing..."),
+            done: false,
+            error: None,
         });
 
         let mut records: Vec<UsageRecord> = Vec::new();
 
         for (i, path) in chat_files.iter().enumerate() {
-            let chat_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            if let Ok(content) = std::fs::read_to_string(path) {
-                for line in content.lines() {
-                    if line.trim().is_empty() { continue; }
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            let chat_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if let Ok(file) = File::open(path) {
+                for line in BufReader::new(file).lines().flatten() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
                         let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-                        let (prompt, output, cached, total, model, ts_str) = if msg_type == "assistant" {
+                        let (prompt, output, cached, total, model, ts_str) = if msg_type
+                            == "assistant"
+                        {
                             // From usageMetadata
                             let usage = val.get("usageMetadata");
                             (
-                                usage.and_then(|u| u.get("promptTokenCount")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                usage.and_then(|u| u.get("candidatesTokenCount")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                usage.and_then(|u| u.get("cachedContentTokenCount")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                usage.and_then(|u| u.get("totalTokenCount")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                val.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                                val.get("timestamp").or_else(|| val.get("time")).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                usage
+                                    .and_then(|u| u.get("promptTokenCount"))
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                usage
+                                    .and_then(|u| u.get("candidatesTokenCount"))
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                usage
+                                    .and_then(|u| u.get("cachedContentTokenCount"))
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                usage
+                                    .and_then(|u| u.get("totalTokenCount"))
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                val.get("model")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                val.get("timestamp")
+                                    .or_else(|| val.get("time"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
                             )
                         } else if msg_type == "system" {
                             // From ui_telemetry events
-                            let payload = val.get("systemPayload")
-                                .and_then(|p| p.get("uiEvent"));
-                            let event = payload.and_then(|p| p.get("event.name")).and_then(|v| v.as_str());
+                            let payload = val.get("systemPayload").and_then(|p| p.get("uiEvent"));
+                            let event = payload
+                                .and_then(|p| p.get("event.name"))
+                                .and_then(|v| v.as_str());
                             if event == Some("qwen-code.api_response") {
                                 (
-                                    payload.and_then(|p| p.get("input_token_count")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    payload.and_then(|p| p.get("output_token_count")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    payload.and_then(|p| p.get("cached_content_token_count")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    payload.and_then(|p| p.get("total_token_count")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    payload.and_then(|p| p.get("model")).and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                                    val.get("timestamp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                    payload
+                                        .and_then(|p| p.get("input_token_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0),
+                                    payload
+                                        .and_then(|p| p.get("output_token_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0),
+                                    payload
+                                        .and_then(|p| p.get("cached_content_token_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0),
+                                    payload
+                                        .and_then(|p| p.get("total_token_count"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0),
+                                    payload
+                                        .and_then(|p| p.get("model"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    val.get("timestamp")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
                                 )
                             } else {
                                 continue;
@@ -661,8 +1011,14 @@ impl UsageReader for QwenReader {
 
                         let dt = if let Ok(d) = chrono::DateTime::parse_from_rfc3339(&ts_str) {
                             d
-                        } else if let Ok(d) = chrono::DateTime::parse_from_rfc3339(&format!("{}T00:00:00Z", &ts_str[..10])) {
-                            d
+                        } else if let Some(date_part) = ts_str.get(..10) {
+                            if let Ok(d) = chrono::DateTime::parse_from_rfc3339(&format!(
+                                "{date_part}T00:00:00Z"
+                            )) {
+                                d
+                            } else {
+                                continue;
+                            }
                         } else {
                             continue;
                         };
@@ -696,16 +1052,25 @@ impl UsageReader for QwenReader {
             if i % 5 == 0 || i == total_files - 1 {
                 let p = 0.15 + (i as f32 / total_files.max(1) as f32) * 0.85;
                 let _ = progress.send(ProgressUpdate {
-                    cli_name: self.name().to_string(), percent: p,
-                    message: format!("Parsed {}/{} chat files", i + 1, total_files), done: false, error: None,
+                    cli_name: self.name().to_string(),
+                    percent: p,
+                    message: format!("Parsed {}/{} chat files", i + 1, total_files),
+                    done: false,
+                    error: None,
                 });
             }
         }
 
         let _ = progress.send(ProgressUpdate {
-            cli_name: self.name().to_string(), percent: 1.0,
-            message: format!("Done: {} records, {} tokens", records.len(), format_tokens_full(records.iter().map(|r| r.total_tokens).sum())),
-            done: true, error: None,
+            cli_name: self.name().to_string(),
+            percent: 1.0,
+            message: format!(
+                "Done: {} records, {} tokens",
+                records.len(),
+                format_tokens_full(records.iter().map(|r| r.total_tokens).sum())
+            ),
+            done: true,
+            error: None,
         });
         records
     }
@@ -720,23 +1085,24 @@ fn which_installed(name: &str) -> bool {
         .any(|dir| std::path::Path::new(dir).join(name).exists())
 }
 
-pub fn detect_readers() -> Vec<Box<dyn UsageReader>> {
+pub fn detect_readers(overrides: &HashMap<String, String>) -> Vec<Box<dyn UsageReader>> {
     let readers: Vec<Box<dyn UsageReader>> = vec![
-        Box::new(OpencodeReader),
-        Box::new(HermesReader),
-        Box::new(CodexReader),
-        Box::new(ClaudeReader),
-        Box::new(QwenReader),
+        Box::new(OpencodeReader::new(overrides)),
+        Box::new(HermesReader::new(overrides)),
+        Box::new(CodexReader::new(overrides)),
+        Box::new(ClaudeReader::new(overrides)),
+        Box::new(QwenReader::new(overrides)),
     ];
 
-    let installed: Vec<_> = readers.into_iter()
-        .filter(|r| r.is_installed())
-        .collect();
+    let installed: Vec<_> = readers.into_iter().filter(|r| r.is_installed()).collect();
 
     if installed.is_empty() {
         tracing::warn!("No supported CLI tools detected!");
     } else {
-        tracing::info!("Detected CLI tools: {:?}", installed.iter().map(|r| r.name()).collect::<Vec<_>>());
+        tracing::info!(
+            "Detected CLI tools: {:?}",
+            installed.iter().map(|r| r.name()).collect::<Vec<_>>()
+        );
     }
 
     installed
